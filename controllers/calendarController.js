@@ -211,7 +211,6 @@ const syncCalendar = catchAsync(async (req, res, next) => {
   const calendarApi = google.calendar({ version: 'v3', auth: oauth2Client });
   const events = await calendarApi.events.list({
     calendarId: 'primary',
-    timeMin: new Date().toISOString(),
     maxResults: 100,
     singleEvents: true,
     orderBy: 'startTime',
