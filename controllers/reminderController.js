@@ -3,28 +3,82 @@ const User = require('../models/userModel');
 const axios = require('axios');
 const { validationResult } = require('express-validator');
 
-// Helper function to extract coordinates from Google Maps URL
+// Helper: attempt to extract coordinates from a Google Maps (or similar) URL
 async function getCoordinatesFromUrl(url) {
   try {
-    // Extract place ID from URL
-    const placeIdMatch = url.match(/[?&]q=([^&]+)/) || url.match(/place\/([^/]+)/);
-    if (!placeIdMatch) return null;
+    if (!url) return null;
 
-    const placeId = placeIdMatch[1];
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/geocode/json`,
-      {
-        params: {
-          place_id: placeId,
-          key: process.env.GOOGLE_MAPS_API_KEY
+    let workingUrl = url;
+
+    // If it's a short link (maps.app.goo.gl, goo.gl/maps, g.co/maps), try to resolve to the long redirect URL first
+    if (/maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/maps/.test(url)) {
+      try {
+        const resp = await axios.get(url, { maxRedirects: 5, timeout: 5000, validateStatus: () => true });
+        const finalUrl = resp?.request?.res?.responseUrl || resp?.request?.responseURL || resp?.config?.url;
+        if (finalUrl && typeof finalUrl === 'string') {
+          workingUrl = finalUrl;
         }
+      } catch (e) {
+        // ignore, we'll try to parse the original url
       }
-    );
-
-    if (response.data.results && response.data.results[0]) {
-      const { lat, lng } = response.data.results[0].geometry.location;
-      return { lat, lng };
     }
+
+    // Common pattern in Google Maps share links: .../@lat,lng,zoom...
+    const atMatch = workingUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (atMatch) {
+      const lat = parseFloat(atMatch[1]);
+      const lng = parseFloat(atMatch[2]);
+      if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+    }
+
+    // q=lat,lng or query param with coordinates
+    const qParam = workingUrl.match(/[?&]q=([^&]+)/);
+    if (qParam) {
+      const decoded = decodeURIComponent(qParam[1]);
+      const coordMatch = decoded.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+      if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[2]);
+        if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+      }
+    }
+
+    // Other common params: ll=lat,lng or sll=lat,lng or destination=lat,lng
+    const otherParams = workingUrl.match(/[?&](ll|sll|destination)=([^&]+)/);
+    if (otherParams) {
+      const decoded = decodeURIComponent(otherParams[2]);
+      const coordMatch = decoded.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+      if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[2]);
+        if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+      }
+    }
+
+    // If we cannot parse directly, fall back to geocoding the name or address portion (if present)
+    // Try extracting the place text from the URL path (e.g., /place/<name>/)
+    const placePath = workingUrl.match(/\/place\/([^/]+)/);
+    if (placePath && process.env.GOOGLE_MAPS_API_KEY) {
+      const placeText = decodeURIComponent(placePath[1]).replace(/\+/g, ' ');
+      const response = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json`, {
+        params: { address: placeText, key: process.env.GOOGLE_MAPS_API_KEY }
+      });
+      if (response.data.results?.[0]?.geometry?.location) {
+        const { lat, lng } = response.data.results[0].geometry.location;
+        return { lat, lng };
+      }
+    }
+
+    // As a last non-API attempt, try to detect any lat,lng pair anywhere in the URL/text
+    const genericMatch = workingUrl.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+    if (genericMatch) {
+      const lat = parseFloat(genericMatch[1]);
+      const lng = parseFloat(genericMatch[2]);
+      if (!isNaN(lat) && !isNaN(lng) && lat <= 90 && lat >= -90 && lng <= 180 && lng >= -180) {
+        return { lat, lng };
+      }
+    }
+
     return null;
   } catch (error) {
     console.error('Error getting coordinates:', error);
@@ -111,24 +165,28 @@ exports.createReminder = async (req, res) => {
         link: location.link || ''
       };
       
-      // If there's a Google Maps link, try to extract coordinates
-      if (location.link && location.link.includes('maps.google.com')) {
-        try {
-          const address = encodeURIComponent(location.name);
-          const response = await axios.get(
-            `https://maps.googleapis.com/maps/api/geocode/json?address=${address}&key=${process.env.GOOGLE_MAPS_API_KEY}`
-          );
-          
-          if (response.data.results?.[0]?.geometry?.location) {
-            reminderData.location.coordinates = [
-              response.data.results[0].geometry.location.lng,
-              response.data.results[0].geometry.location.lat
-            ];
-          }
-        } catch (error) {
-          console.error('Error getting coordinates:', error);
-          // Don't fail the request if we can't get coordinates
+      // Try to extract coordinates from provided link first; if not available, geocode by name
+      try {
+        let coords = null;
+        if (location.link) {
+          coords = await getCoordinatesFromUrl(location.link);
         }
+        if (!coords && process.env.GOOGLE_MAPS_API_KEY) {
+          const response = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json`, {
+            params: { address: location.name, key: process.env.GOOGLE_MAPS_API_KEY }
+          });
+          if (response.data.results?.[0]?.geometry?.location) {
+            const { lat, lng } = response.data.results[0].geometry.location;
+            coords = { lat, lng };
+          }
+        }
+        if (coords) {
+          // Store as object { lat, lng } to match the schema
+          reminderData.location.coordinates = { lat: coords.lat, lng: coords.lng };
+        }
+      } catch (error) {
+        console.error('Error getting coordinates:', error);
+        // Don't fail the request if we can't get coordinates
       }
     }
 
