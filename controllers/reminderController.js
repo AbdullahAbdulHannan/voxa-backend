@@ -165,11 +165,15 @@ exports.createReminder = async (req, res) => {
         link: location.link || ''
       };
       
-      // Try to extract coordinates from provided link first; if not available, geocode by name
+      // Prefer client-provided coordinates if valid; otherwise try to extract from link; finally geocode by name if API key exists
       try {
         let coords = null;
+        if (location.coordinates && typeof location.coordinates.lat === 'number' && typeof location.coordinates.lng === 'number') {
+          coords = { lat: location.coordinates.lat, lng: location.coordinates.lng };
+        }
         if (location.link) {
-          coords = await getCoordinatesFromUrl(location.link);
+          const parsed = await getCoordinatesFromUrl(location.link);
+          if (!coords && parsed) coords = parsed;
         }
         if (!coords && process.env.GOOGLE_MAPS_API_KEY) {
           const response = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json`, {
