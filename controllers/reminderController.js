@@ -3,86 +3,95 @@ const User = require('../models/userModel');
 const axios = require('axios');
 const { validationResult } = require('express-validator');
 
-// Helper: attempt to extract coordinates from a Google Maps (or similar) URL
+// Helper: extract coordinates from mapping URLs with multiple providers; fallback to LocationIQ
 async function getCoordinatesFromUrl(url) {
   try {
-    if (!url) return null;
+    if (!url) throw new Error('No URL provided');
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
 
-    let workingUrl = url;
-
-    // If it's a short link (maps.app.goo.gl, goo.gl/maps, g.co/maps), try to resolve to the long redirect URL first
-    if (/maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/maps/.test(url)) {
-      try {
-        const resp = await axios.get(url, { maxRedirects: 5, timeout: 5000, validateStatus: () => true });
-        const finalUrl = resp?.request?.res?.responseUrl || resp?.request?.responseURL || resp?.config?.url;
-        if (finalUrl && typeof finalUrl === 'string') {
-          workingUrl = finalUrl;
-        }
-      } catch (e) {
-        // ignore, we'll try to parse the original url
-      }
-    }
-
-    // Common pattern in Google Maps share links: .../@lat,lng,zoom...
-    const atMatch = workingUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    // 1) Google Maps (full link) - look for /@lat,lng
+    const atMatch = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
     if (atMatch) {
       const lat = parseFloat(atMatch[1]);
       const lng = parseFloat(atMatch[2]);
       if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
     }
 
-    // q=lat,lng or query param with coordinates
-    const qParam = workingUrl.match(/[?&]q=([^&]+)/);
-    if (qParam) {
-      const decoded = decodeURIComponent(qParam[1]);
-      const coordMatch = decoded.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
-      if (coordMatch) {
-        const lat = parseFloat(coordMatch[1]);
-        const lng = parseFloat(coordMatch[2]);
+    // 2) Google Maps (short link)
+    if (host.includes('maps.app.goo.gl')) {
+      try {
+        const fetchFn = (...args) => import('node-fetch').then(m => m.default(...args));
+        const resp = await fetchFn(url, { method: 'GET', redirect: 'manual' });
+        const loc = resp.headers.get('location');
+        if (loc) {
+          const longUrl = loc;
+          const at = longUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+          if (at) {
+            const lat = parseFloat(at[1]);
+            const lng = parseFloat(at[2]);
+            if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+          }
+        }
+      } catch (e) {
+        // continue to other providers/fallbacks
+      }
+    }
+
+    // 3) Apple Maps - ll=lat,lng
+    if (host.includes('maps.apple.com')) {
+      const ll = parsed.searchParams.get('ll');
+      if (ll) {
+        const m = ll.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
+        if (m) {
+          const lat = parseFloat(m[1]);
+          const lng = parseFloat(m[2]);
+          if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+        }
+      }
+    }
+
+    // 4) OpenStreetMap - mlat & mlon
+    if (host.includes('openstreetmap.org')) {
+      const mlat = parsed.searchParams.get('mlat');
+      const mlon = parsed.searchParams.get('mlon');
+      if (mlat && mlon) {
+        const lat = parseFloat(mlat);
+        const lng = parseFloat(mlon);
         if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
       }
     }
 
-    // Other common params: ll=lat,lng or sll=lat,lng or destination=lat,lng
-    const otherParams = workingUrl.match(/[?&](ll|sll|destination)=([^&]+)/);
-    if (otherParams) {
-      const decoded = decodeURIComponent(otherParams[2]);
-      const coordMatch = decoded.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
-      if (coordMatch) {
-        const lat = parseFloat(coordMatch[1]);
-        const lng = parseFloat(coordMatch[2]);
-        if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+    // 5) Fallback to LocationIQ (by query text)
+    const LOCATIONIQ_KEY = process.env.LOCATIONIQ_KEY;
+    if (!LOCATIONIQ_KEY) {
+      throw new Error('LOCATIONIQ_KEY is not set and coordinates could not be parsed from URL');
+    }
+
+    // Prefer q param; otherwise derive from path
+    let queryText = parsed.searchParams.get('q');
+    if (!queryText) {
+      // Try to get something meaningful from the pathname (e.g., /place/Some+Place)
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      if (pathParts.length > 0) {
+        queryText = decodeURIComponent(pathParts[pathParts.length - 1]).replace(/\+/g, ' ');
+      } else {
+        throw new Error('Unable to derive query text from URL for LocationIQ');
       }
     }
 
-    // If we cannot parse directly, fall back to geocoding the name or address portion (if present)
-    // Try extracting the place text from the URL path (e.g., /place/<name>/)
-    const placePath = workingUrl.match(/\/place\/([^/]+)/);
-    if (placePath && process.env.GOOGLE_MAPS_API_KEY) {
-      const placeText = decodeURIComponent(placePath[1]).replace(/\+/g, ' ');
-      const response = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json`, {
-        params: { address: placeText, key: process.env.GOOGLE_MAPS_API_KEY }
-      });
-      if (response.data.results?.[0]?.geometry?.location) {
-        const { lat, lng } = response.data.results[0].geometry.location;
-        return { lat, lng };
-      }
-    }
-
-    // As a last non-API attempt, try to detect any lat,lng pair anywhere in the URL/text
-    const genericMatch = workingUrl.match(/(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)/);
-    if (genericMatch) {
-      const lat = parseFloat(genericMatch[1]);
-      const lng = parseFloat(genericMatch[2]);
-      if (!isNaN(lat) && !isNaN(lng) && lat <= 90 && lat >= -90 && lng <= 180 && lng >= -180) {
-        return { lat, lng };
-      }
-    }
-
-    return null;
+    const iqResp = await axios.get('https://us1.locationiq.com/v1/search.php', {
+      params: { key: LOCATIONIQ_KEY, q: queryText, format: 'json' },
+      timeout: 8000,
+    });
+    const first = Array.isArray(iqResp.data) ? iqResp.data[0] : null;
+    if (!first) throw new Error('LocationIQ returned no results');
+    const lat = parseFloat(first.lat);
+    const lng = parseFloat(first.lon);
+    if (isNaN(lat) || isNaN(lng)) throw new Error('LocationIQ returned invalid coordinates');
+    return { lat, lng };
   } catch (error) {
-    console.error('Error getting coordinates:', error);
-    return null;
+    throw new Error(`Coordinate resolution failed: ${error.message}`);
   }
 }
 
@@ -165,32 +174,42 @@ exports.createReminder = async (req, res) => {
         link: location.link || ''
       };
       
-      // Prefer client-provided coordinates if valid; otherwise try to extract from link; finally geocode by name if API key exists
+      // Resolve coordinates (client-provided OR via URL/provider OR LocationIQ fallback). Must succeed.
       try {
         let coords = null;
         if (location.coordinates && typeof location.coordinates.lat === 'number' && typeof location.coordinates.lng === 'number') {
           coords = { lat: location.coordinates.lat, lng: location.coordinates.lng };
-        }
-        if (location.link) {
-          const parsed = await getCoordinatesFromUrl(location.link);
-          if (!coords && parsed) coords = parsed;
-        }
-        if (!coords && process.env.GOOGLE_MAPS_API_KEY) {
-          const response = await axios.get(`https://maps.googleapis.com/maps/api/geocode/json`, {
-            params: { address: location.name, key: process.env.GOOGLE_MAPS_API_KEY }
+        } else if (location.link) {
+          coords = await getCoordinatesFromUrl(location.link);
+        } else {
+          // As a last resort, try LocationIQ using the name
+          const LOCATIONIQ_KEY = process.env.LOCATIONIQ_KEY;
+          if (!LOCATIONIQ_KEY) {
+            throw new Error('LOCATIONIQ_KEY is not set and no link provided to infer coordinates');
+          }
+          const iqResp = await axios.get('https://us1.locationiq.com/v1/search.php', {
+            params: { key: LOCATIONIQ_KEY, q: location.name, format: 'json' },
+            timeout: 8000,
           });
-          if (response.data.results?.[0]?.geometry?.location) {
-            const { lat, lng } = response.data.results[0].geometry.location;
-            coords = { lat, lng };
+          const first = Array.isArray(iqResp.data) ? iqResp.data[0] : null;
+          if (first) {
+            const lat = parseFloat(first.lat);
+            const lng = parseFloat(first.lon);
+            if (!isNaN(lat) && !isNaN(lng)) coords = { lat, lng };
           }
         }
-        if (coords) {
-          // Store as object { lat, lng } to match the schema
-          reminderData.location.coordinates = { lat: coords.lat, lng: coords.lng };
+
+        if (!coords) {
+          return res.status(400).json({
+            success: false,
+            message: 'Failed to resolve coordinates for the provided location link/name. Ensure the link contains coordinates or configure LOCATIONIQ_KEY.'
+          });
         }
+
+        reminderData.location.coordinates = { lat: coords.lat, lng: coords.lng };
       } catch (error) {
-        console.error('Error getting coordinates:', error);
-        // Don't fail the request if we can't get coordinates
+        console.error('Error resolving coordinates:', error);
+        return res.status(400).json({ success: false, message: error.message || 'Failed to resolve coordinates' });
       }
     }
 
