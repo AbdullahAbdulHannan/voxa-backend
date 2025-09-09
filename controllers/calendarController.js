@@ -2,6 +2,7 @@ const { google } = require('googleapis');
 const { OAuth2 } = google.auth;
 const Calendar = require('../models/calendarModel');
 const User = require('../models/userModel');
+const Reminder = require('../models/reminderModel');
 const catchAsync = require('../utils/catchAsync');
 const AppError = require('../utils/appError');
 const jwt = require('jsonwebtoken');
@@ -116,8 +117,9 @@ const handleCallback = catchAsync(async (req, res, next) => {
       try {
         const eventsResponse = await calendar.events.list({
           calendarId: 'primary',
-          timeMin: new Date().toISOString(),
-          maxResults: 10,
+          // Fetch a reasonable window into the past to include historical items
+          timeMin: new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString(),
+          maxResults: 250,
           singleEvents: true,
           orderBy: 'startTime',
         });
@@ -183,7 +185,7 @@ const handleCallback = catchAsync(async (req, res, next) => {
   }
 });
 
-// Sync calendar events
+// Sync calendar events (includes past events with pagination)
 const syncCalendar = catchAsync(async (req, res, next) => {
   const { user } = req;
   
@@ -207,17 +209,28 @@ const syncCalendar = catchAsync(async (req, res, next) => {
     await calendar.save();
   }
 
-  // Get updated events
+  // Get updated events (paginate and include past year)
   const calendarApi = google.calendar({ version: 'v3', auth: oauth2Client });
-  const events = await calendarApi.events.list({
-    calendarId: 'primary',
-    maxResults: 100,
-    singleEvents: true,
-    orderBy: 'startTime',
-  });
+  const allEvents = [];
+  let pageToken = undefined;
+  const timeMin = new Date(new Date().setFullYear(new Date().getFullYear() - 1)).toISOString();
+  do {
+    const resp = await calendarApi.events.list({
+      calendarId: 'primary',
+      timeMin,
+      maxResults: 2500, // Google API limit per page
+      singleEvents: true,
+      orderBy: 'startTime',
+      pageToken,
+    });
+    if (resp.data.items && resp.data.items.length) {
+      allEvents.push(...resp.data.items);
+    }
+    pageToken = resp.data.nextPageToken;
+  } while (pageToken);
 
   // Update events
-  calendar.events = events.data.items || [];
+  calendar.events = allEvents;
   calendar.lastSynced = new Date();
   await calendar.save();
 
@@ -226,6 +239,52 @@ const syncCalendar = catchAsync(async (req, res, next) => {
     data: {
       events: calendar.events,
       lastSynced: calendar.lastSynced
+    }
+  });
+});
+
+// Get unified calendar items: events from Google + tasks and meetings from reminders
+const getCalendarItems = catchAsync(async (req, res, next) => {
+  const { user } = req;
+
+  // Fetch calendar (if connected)
+  const calendar = await Calendar.findOne({ user: user._id })
+    .select('events lastSynced');
+
+  // Fetch reminders
+  const reminders = await Reminder.find({ user: user._id })
+    .select('type title description startDate endDate location isCompleted');
+
+  const tasks = reminders
+    .filter(r => r.type === 'Task')
+    .map(r => ({
+      id: r._id,
+      title: r.title,
+      description: r.description,
+      startTime: r.startDate,
+      endTime: r.endDate,
+      location: r.location?.name || '',
+      status: r.isCompleted ? 'completed' : 'pending',
+    }));
+
+  const meetings = reminders
+    .filter(r => r.type === 'Meeting')
+    .map(r => ({
+      id: r._id,
+      title: r.title,
+      description: r.description,
+      startTime: r.startDate,
+      endTime: r.endDate,
+      location: r.location?.name || '',
+    }));
+
+  res.status(200).json({
+    status: 'success',
+    data: {
+      events: calendar ? calendar.events : [],
+      tasks,
+      meetings,
+      lastSynced: calendar ? calendar.lastSynced : null,
     }
   });
 });
@@ -254,5 +313,6 @@ module.exports = {
   getAuthUrl,
   handleCallback,
   syncCalendar,
-  getCalendarEvents
+  getCalendarEvents,
+  getCalendarItems
 };

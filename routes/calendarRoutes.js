@@ -15,5 +15,6 @@ router.get('/auth/google/callback', calendarController.handleCallback);
 // Calendar operations
 router.get('/calendar/sync', auth, calendarController.syncCalendar);
 router.get('/calendar/events', auth, calendarController.getCalendarEvents);
+router.get('/calendar/items', auth, calendarController.getCalendarItems);
 
 module.exports = router;
