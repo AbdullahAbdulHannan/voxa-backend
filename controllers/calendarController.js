@@ -75,6 +75,30 @@ const handleCallback = catchAsync(async (req, res, next) => {
     console.warn('Could not fetch initial events:', err.message);
   }
 
+  // Fetch initial Google Tasks as well
+  let storedTasks = [];
+  try {
+    const tasksApi = google.tasks({ version: 'v1', auth: oauth2Client });
+    const listsResp = await tasksApi.tasklists.list({ maxResults: 10 });
+    for (const list of listsResp.data.items || []) {
+      const tResp = await tasksApi.tasks.list({ tasklist: list.id, maxResults: 100, showCompleted: true });
+      for (const t of (tResp.data.items || [])) {
+        storedTasks.push({
+          googleTaskId: t.id,
+          title: t.title,
+          description: t.notes || '',
+          due: t.due ? new Date(t.due) : undefined,
+          status: t.status,
+          updated: t.updated ? new Date(t.updated) : new Date(),
+          completedAt: t.completed ? new Date(t.completed) : undefined,
+          taskListId: list.id
+        });
+      }
+    }
+  } catch (e) {
+    // Ignore tasks fetch errors here; user may not have granted scope yet
+  }
+
   // Save calendar data
   await Calendar.findOneAndUpdate(
     { user: user._id },
@@ -84,6 +108,7 @@ const handleCallback = catchAsync(async (req, res, next) => {
       refreshToken: tokens.refresh_token,
       tokenExpiry: new Date(tokens.expiry_date),
       events,
+      ...(storedTasks.length ? { tasks: storedTasks } : {}),
       lastSynced: new Date()
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -131,6 +156,32 @@ const syncCalendar = catchAsync(async (req, res, next) => {
   } while (pageToken);
 
   calendar.events = allEvents;
+  
+  // Also sync Google Tasks into stored calendar.tasks
+  try {
+    const tasksApi = google.tasks({ version: 'v1', auth: oauth2Client });
+    const listsResp = await tasksApi.tasklists.list({ maxResults: 10 });
+    const aggregatedTasks = [];
+    for (const list of listsResp.data.items || []) {
+      const tResp = await tasksApi.tasks.list({ tasklist: list.id, maxResults: 100, showCompleted: true });
+      for (const t of (tResp.data.items || [])) {
+        aggregatedTasks.push({
+          googleTaskId: t.id,
+          title: t.title,
+          description: t.notes || '',
+          due: t.due ? new Date(t.due) : undefined,
+          status: t.status,
+          updated: t.updated ? new Date(t.updated) : new Date(),
+          completedAt: t.completed ? new Date(t.completed) : undefined,
+          taskListId: list.id
+        });
+      }
+    }
+    calendar.tasks = aggregatedTasks;
+  } catch (e) {
+    // swallow tasks sync issues; do not break events sync
+  }
+
   calendar.lastSynced = new Date();
   await calendar.save();
 
@@ -140,7 +191,7 @@ const syncCalendar = catchAsync(async (req, res, next) => {
 // ✅ Get unified calendar items (events + tasks + reminders)
 const getCalendarItems = catchAsync(async (req, res) => {
   const { user } = req;
-  const calendar = await Calendar.findOne({ user: user._id }).select('events lastSynced accessToken refreshToken tokenExpiry');
+  const calendar = await Calendar.findOne({ user: user._id }).select('events tasks lastSynced accessToken refreshToken tokenExpiry');
   const reminders = await Reminder.find({ user: user._id }).select('type title description startDate endDate location isCompleted');
 
   let googleTasks = [];
@@ -171,6 +222,17 @@ const getCalendarItems = catchAsync(async (req, res) => {
     }
   }
 
+  // Include stored tasks from DB as a fallback/union
+  const storedTasksFromDb = (calendar?.tasks || []).map(t => ({
+    id: t.googleTaskId,
+    title: t.title,
+    description: t.description || '',
+    startTime: t.due || t.updated,
+    endTime: t.due || t.updated,
+    location: '',
+    status: t.status
+  }));
+
   const tasks = reminders.filter(r => r.type === 'Task').map(r => ({
     id: r._id,
     title: r.title,
@@ -194,7 +256,7 @@ const getCalendarItems = catchAsync(async (req, res) => {
     status: 'success',
     data: {
       events: calendar ? calendar.events : [],
-      tasks: [...tasks, ...googleTasks],
+      tasks: [...tasks, ...storedTasksFromDb, ...googleTasks],
       meetings,
       lastSynced: calendar ? calendar.lastSynced : null
     }
