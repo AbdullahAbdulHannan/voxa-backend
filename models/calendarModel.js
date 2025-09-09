@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 
+// ---------------- Event Schema ----------------
 const eventSchema = new mongoose.Schema({
   googleEventId: {
     type: String,
@@ -9,12 +10,8 @@ const eventSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  description: {
-    type: String
-  },
-  location: {
-    type: String
-  },
+  description: String,
+  location: String,
   start: {
     dateTime: {
       type: Date,
@@ -34,9 +31,7 @@ const eventSchema = new mongoose.Schema({
     enum: ['confirmed', 'tentative', 'cancelled'],
     default: 'confirmed'
   },
-  htmlLink: {
-    type: String
-  },
+  htmlLink: String,
   created: {
     type: Date,
     default: Date.now
@@ -47,6 +42,34 @@ const eventSchema = new mongoose.Schema({
   }
 });
 
+// ---------------- Task Schema ----------------
+const taskSchema = new mongoose.Schema({
+  googleTaskId: {
+    type: String,
+    required: true
+  },
+  title: {
+    type: String,
+    required: true
+  },
+  description: String,
+  due: {
+    type: Date
+  },
+  status: {
+    type: String,
+    enum: ['needsAction', 'completed'],
+    default: 'needsAction'
+  },
+  updated: {
+    type: Date,
+    default: Date.now
+  },
+  completedAt: Date,
+  taskListId: String // Which Google Tasklist this belongs to
+});
+
+// ---------------- Calendar Schema ----------------
 const calendarSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -67,16 +90,16 @@ const calendarSchema = new mongoose.Schema({
     required: true
   },
   events: [eventSchema],
-  lastSynced: {
-    type: Date
-  }
+  tasks: [taskSchema], // <-- Added tasks storage
+  lastSynced: Date
 }, {
   timestamps: true
 });
 
-// Index for faster querying
+// ---------------- Indexes ----------------
 calendarSchema.index({ user: 1 });
 calendarSchema.index({ 'events.googleEventId': 1 });
+calendarSchema.index({ 'tasks.googleTaskId': 1 });
 
 const Calendar = mongoose.model('Calendar', calendarSchema);
 
