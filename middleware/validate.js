@@ -16,14 +16,16 @@ const validate = (req, res, next) => {
   // Extract error messages
   const extractedErrors = [];
   errors.array().map(err => {
+    // Defensive checks: err.param may be undefined
+    const param = typeof err.param === 'string' ? err.param : '';
     // Handle nested errors (e.g., location.name)
-    const field = err.param.includes('.') 
-      ? err.param.split('.')[1] 
-      : err.param;
-      
+    const field = param && param.includes('.')
+      ? param.split('.')[1]
+      : (param || 'field');
+
     extractedErrors.push({
       field,
-      message: err.msg
+      message: err.msg || 'Invalid value'
     });
   });
 
