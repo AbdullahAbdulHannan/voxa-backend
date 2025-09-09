@@ -36,6 +36,7 @@ const getAuthUrl = catchAsync(async (req, res) => {
         // Include read-only Google Tasks scope so we can show tasks in CalendarScreen tabs
         'https://www.googleapis.com/auth/tasks.readonly'
       ],
+      include_granted_scopes: true,
       prompt: 'consent',
       state: token // Include the JWT token in the state parameter
     });
@@ -249,9 +250,9 @@ const syncCalendar = catchAsync(async (req, res, next) => {
 const getCalendarItems = catchAsync(async (req, res, next) => {
   const { user } = req;
 
-  // Fetch calendar (if connected)
+  // Fetch calendar (if connected) including tokens
   const calendar = await Calendar.findOne({ user: user._id })
-    .select('events lastSynced');
+    .select('events lastSynced accessToken refreshToken tokenExpiry');
 
   // Fetch reminders
   const reminders = await Reminder.find({ user: user._id })
@@ -261,10 +262,25 @@ const getCalendarItems = catchAsync(async (req, res, next) => {
   let googleTasks = [];
   if (calendar) {
     try {
+      // Set credentials from stored tokens
       oauth2Client.setCredentials({
-        access_token: (await Calendar.findOne({ user: user._id }).select('accessToken')).accessToken,
-        refresh_token: (await Calendar.findOne({ user: user._id }).select('refreshToken')).refreshToken,
+        access_token: calendar.accessToken,
+        refresh_token: calendar.refreshToken,
+        expiry_date: calendar.tokenExpiry && new Date(calendar.tokenExpiry).getTime()
       });
+
+      // Refresh token if needed
+      if (calendar.tokenExpiry && new Date() > new Date(calendar.tokenExpiry)) {
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        calendar.accessToken = credentials.access_token;
+        calendar.tokenExpiry = new Date(credentials.expiry_date);
+        await calendar.save();
+        oauth2Client.setCredentials({
+          access_token: calendar.accessToken,
+          refresh_token: calendar.refreshToken,
+          expiry_date: new Date(calendar.tokenExpiry).getTime()
+        });
+      }
       const tasksApi = google.tasks({ version: 'v1', auth: oauth2Client });
       // List tasklists
       const listsResp = await tasksApi.tasklists.list({ maxResults: 10 });
