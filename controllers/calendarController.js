@@ -32,7 +32,9 @@ const getAuthUrl = catchAsync(async (req, res) => {
       access_type: 'offline',
       scope: [
         'https://www.googleapis.com/auth/calendar',
-        'https://www.googleapis.com/auth/calendar.events'
+        'https://www.googleapis.com/auth/calendar.events',
+        // Include read-only Google Tasks scope so we can show tasks in CalendarScreen tabs
+        'https://www.googleapis.com/auth/tasks.readonly'
       ],
       prompt: 'consent',
       state: token // Include the JWT token in the state parameter
@@ -255,6 +257,41 @@ const getCalendarItems = catchAsync(async (req, res, next) => {
   const reminders = await Reminder.find({ user: user._id })
     .select('type title description startDate endDate location isCompleted');
 
+  // Attempt to fetch Google Tasks (if calendar connection exists and scope was granted)
+  let googleTasks = [];
+  if (calendar) {
+    try {
+      oauth2Client.setCredentials({
+        access_token: (await Calendar.findOne({ user: user._id }).select('accessToken')).accessToken,
+        refresh_token: (await Calendar.findOne({ user: user._id }).select('refreshToken')).refreshToken,
+      });
+      const tasksApi = google.tasks({ version: 'v1', auth: oauth2Client });
+      // List tasklists
+      const listsResp = await tasksApi.tasklists.list({ maxResults: 10 });
+      const lists = listsResp.data.items || [];
+      for (const list of lists) {
+        try {
+          const tResp = await tasksApi.tasks.list({ tasklist: list.id, maxResults: 100, showCompleted: true });
+          if (tResp.data.items && tResp.data.items.length) {
+            googleTasks.push(...tResp.data.items.map(t => ({
+              id: t.id,
+              title: t.title,
+              description: t.notes,
+              startTime: t.due || t.updated, // Google Tasks may have only due date
+              endTime: t.due || t.updated,
+              location: '',
+              status: t.status, // 'needsAction' | 'completed'
+            })));
+          }
+        } catch (e) {
+          // continue other lists
+        }
+      }
+    } catch (e) {
+      // If scope is missing or tokens invalid for tasks, ignore silently
+    }
+  }
+
   const tasks = reminders
     .filter(r => r.type === 'Task')
     .map(r => ({
@@ -282,7 +319,7 @@ const getCalendarItems = catchAsync(async (req, res, next) => {
     status: 'success',
     data: {
       events: calendar ? calendar.events : [],
-      tasks,
+      tasks: [...tasks, ...googleTasks],
       meetings,
       lastSynced: calendar ? calendar.lastSynced : null,
     }
