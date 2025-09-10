@@ -299,33 +299,44 @@ exports.getReminders = async (req, res) => {
 exports.updateReminder = async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
-    
+    const updates = req.body || {};
+
     // Prevent changing user ID
-    if (updates.user) {
-      delete updates.user;
+    if (updates.user) delete updates.user;
+
+    // Load existing reminder to validate merged dates
+    const existing = await Reminder.findOne({ _id: id, user: req.user._id });
+    if (!existing) {
+      return res.status(404).json({ message: 'Reminder not found' });
     }
 
-    // If updating dates, validate them
-    if (updates.startDate && updates.endDate) {
-      if (new Date(updates.endDate) <= new Date(updates.startDate)) {
+    // Merge dates for validation (only for non-Location)
+    const nextType = updates.type || existing.type;
+    if (nextType !== 'Location') {
+      const mergedStart = updates.startDate ? new Date(updates.startDate) : existing.startDate;
+      const mergedEnd = updates.endDate ? new Date(updates.endDate) : existing.endDate;
+
+      if (!mergedStart || !mergedEnd) {
+        return res.status(400).json({ message: 'Both start and end dates are required for this reminder type' });
+      }
+      if (new Date(mergedEnd).getTime() <= new Date(mergedStart).getTime()) {
         return res.status(400).json({ message: 'End date must be after start date' });
       }
     }
 
-    const reminder = await Reminder.findOneAndUpdate(
+    const updated = await Reminder.findOneAndUpdate(
       { _id: id, user: req.user._id },
       { $set: updates },
       { new: true, runValidators: true }
     );
 
-    if (!reminder) {
-      return res.status(404).json({ message: 'Reminder not found' });
-    }
-
-    res.json(reminder);
+    res.json(updated);
   } catch (error) {
     console.error('Error updating reminder:', error);
+    // Surface validation error messages clearly
+    if (error?.name === 'ValidationError') {
+      return res.status(400).json({ message: error.message });
+    }
     res.status(500).json({ message: 'Server error' });
   }
 };
