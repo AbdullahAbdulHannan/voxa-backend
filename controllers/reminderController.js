@@ -259,11 +259,15 @@ exports.getReminders = async (req, res) => {
     if (completed !== undefined) query.completed = completed === 'true';
     
     // Date range filtering
-    if (startDate || endDate) {
-      query.startDate = {};
-      if (startDate) query.startDate.$gte = new Date(startDate);
-      if (endDate) query.startDate.$lte = new Date(endDate);
-    }
+    // Date range filtering - skip for Location type
+if (startDate || endDate) {
+  if (!type || type !== 'Location') {
+    query.startDate = {};
+    if (startDate) query.startDate.$gte = new Date(startDate);
+    if (endDate) query.startDate.$lte = new Date(endDate);
+  }
+}
+
     
     // Get paginated results
     const reminders = await Reminder.find(query)
@@ -324,11 +328,19 @@ exports.updateReminder = async (req, res) => {
       }
     }
 
-    const updated = await Reminder.findOneAndUpdate(
-      { _id: id, user: req.user._id },
-      { $set: updates },
-      { new: true, runValidators: true }
-    );
+    const updatePayload = { ...updates };
+
+// Force merged dates for non-Location types
+if (nextType !== 'Location') {
+  updatePayload.startDate = mergedStart;
+  updatePayload.endDate = mergedEnd;
+}
+
+const updated = await Reminder.findOneAndUpdate(
+  { _id: id, user: req.user._id },
+  { $set: updatePayload },
+  { new: true, runValidators: true }
+);
 
     res.json(updated);
   } catch (error) {
