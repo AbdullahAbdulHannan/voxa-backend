@@ -1,7 +1,7 @@
 const Reminder = require('../models/reminderModel');
 const User = require('../models/userModel');
 const axios = require('axios');
-const asyncHandler = requir("express-async-handler");
+const asyncHandler = require("express-async-handler");
 const { validationResult } = require('express-validator');
 
 // Helper: extract coordinates from mapping URLs with multiple providers; fallback to LocationIQ
