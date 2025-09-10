@@ -100,6 +100,6 @@ userSchema.pre(/^find/, function(next) {
 });
 
 // Index for better query performance
-userSchema.index({ email: 1 });
+// userSchema.index({ email: 1 });
 
 module.exports = mongoose.model('User', userSchema);
