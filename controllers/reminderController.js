@@ -300,58 +300,65 @@ if (startDate || endDate) {
 };
 
 // Update a reminder
-exports.updateReminder = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const updates = req.body || {};
 
-    // Prevent changing user ID
-    if (updates.user) delete updates.user;
+exports.updateReminder = asyncHandler(async (req, res) => {
+  const reminder = await Reminder.findById(req.params.id);
 
-    // Load existing reminder to validate merged dates
-    const existing = await Reminder.findOne({ _id: id, user: req.user._id });
-    if (!existing) {
-      return res.status(404).json({ message: 'Reminder not found' });
-    }
-
-    // Merge dates for validation (only for non-Location)
-    const nextType = updates.type || existing.type;
-    if (nextType !== 'Location') {
-      const mergedStart = updates.startDate ? new Date(updates.startDate) : existing.startDate;
-      const mergedEnd = updates.endDate ? new Date(updates.endDate) : existing.endDate;
-
-      if (!mergedStart || !mergedEnd) {
-        return res.status(400).json({ message: 'Both start and end dates are required for this reminder type' });
-      }
-      if (new Date(mergedEnd).getTime() <= new Date(mergedStart).getTime()) {
-        return res.status(400).json({ message: 'End date must be after start date' });
-      }
-    }
-
-    const updatePayload = { ...updates };
-
-// Force merged dates for non-Location types
-if (nextType !== 'Location') {
-  updatePayload.startDate = mergedStart;
-  updatePayload.endDate = mergedEnd;
-}
-
-const updated = await Reminder.findOneAndUpdate(
-  { _id: id, user: req.user._id },
-  { $set: updatePayload },
-  { new: true, runValidators: true }
-);
-
-    res.json(updated);
-  } catch (error) {
-    console.error('Error updating reminder:', error);
-    // Surface validation error messages clearly
-    if (error?.name === 'ValidationError') {
-      return res.status(400).json({ message: error.message });
-    }
-    res.status(500).json({ message: 'Server error' });
+  if (!reminder) {
+    res.status(404);
+    throw new Error("Reminder not found");
   }
-};
+
+  // Base update fields
+  const updateFields = {
+    title: req.body.title || reminder.title,
+    description: req.body.description || reminder.description,
+    icon: req.body.icon || reminder.icon,
+    isCompleted: typeof req.body.isCompleted !== "undefined" 
+      ? req.body.isCompleted 
+      : reminder.isCompleted,
+  };
+
+  // Handle schedule type
+  if (req.body.schedule) {
+    const { type, date, start, end } = req.body.schedule;
+
+    let mergedStart = reminder.schedule?.start;
+    let mergedEnd = reminder.schedule?.end;
+
+    if (start && !mergedStart) mergedStart = start;
+    if (end && !mergedEnd) mergedEnd = end;
+
+    updateFields.schedule = {
+      type: type || reminder.schedule?.type,
+      date: date || reminder.schedule?.date,
+      start: mergedStart,
+      end: mergedEnd,
+    };
+  }
+
+  // Handle location
+  if (req.body.location) {
+    updateFields.location = {
+      name: req.body.location.name || reminder.location?.name,
+      link: req.body.location.link || reminder.location?.link,
+      coordinates: req.body.location.coordinates || reminder.location?.coordinates,
+    };
+  }
+
+  // Update reminder
+  const updatedReminder = await Reminder.findByIdAndUpdate(
+    req.params.id,
+    updateFields,
+    { new: true }
+  ).populate("user", "fullname email");
+
+  res.status(200).json({
+    success: true,
+    data: updatedReminder,
+  });
+});
+
 
 // Delete a reminder
 exports.deleteReminder = async (req, res) => {
