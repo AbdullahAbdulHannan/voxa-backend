@@ -55,6 +55,23 @@ const reminderSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  // TTS fields for dynamic voice notifications
+  tts: {
+    voiceId: { type: String },
+    textHash: { type: String },
+    audio: {
+      data: Buffer,
+      contentType: String,
+      size: Number
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'ready', 'failed'],
+      default: 'pending'
+    },
+    generatedAt: { type: Date },
+    lastTextVersion: { type: Number, default: 0 }
   }
 }, { timestamps: true });
 

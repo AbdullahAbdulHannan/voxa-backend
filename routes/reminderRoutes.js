@@ -96,4 +96,26 @@ router.put(
 // Delete a reminder
 router.delete('/:id', auth, reminderController.deleteReminder);
 
+// Stream saved TTS audio for a reminder
+router.get(
+  '/:id/tts',
+  auth,
+  [
+    param('id').isMongoId().withMessage('Invalid reminder ID'),
+  ],
+  validate,
+  reminderController.getReminderTTS
+);
+
+// Ensure/generate TTS now and return status + textHash
+router.post(
+  '/:id/tts/ensure',
+  auth,
+  [
+    param('id').isMongoId().withMessage('Invalid reminder ID'),
+  ],
+  validate,
+  reminderController.ensureReminderTTSNow
+);
+
 module.exports = router;

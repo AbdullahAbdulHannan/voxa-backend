@@ -1,6 +1,7 @@
 const Reminder = require('../models/reminderModel');
 const User = require('../models/userModel');
 const axios = require('axios');
+const { ensureReminderTTS, buildNotificationText } = require('../utils/ttsService');
 const asyncHandler = require("express-async-handler");
 const { validationResult } = require('express-validator');
 
@@ -224,6 +225,13 @@ exports.createReminder = async (req, res) => {
     // Populate user data in the response
     const populatedReminder = await Reminder.findById(reminder._id).populate('user', 'fullname email');
 
+    // Fire-and-forget TTS generation
+    try {
+      await ensureReminderTTS(populatedReminder._id, { user });
+    } catch (e) {
+      console.warn('[tts] generation failed on create', e?.message);
+    }
+
     res.status(201).json({
       success: true,
       data: populatedReminder
@@ -358,6 +366,21 @@ exports.updateReminder = asyncHandler(async (req, res) => {
     success: true,
     data: updatedReminder,
   });
+  // If text-relevant fields changed, regenerate TTS asynchronously
+  try {
+    const affectsText = (
+      typeof req.body.title !== 'undefined' ||
+      typeof req.body.description !== 'undefined' ||
+      typeof req.body.startDate !== 'undefined' ||
+      typeof req.body.endDate !== 'undefined' ||
+      (req.body.schedule && (req.body.schedule.date || req.body.schedule.start))
+    );
+    if (affectsText) {
+      await ensureReminderTTS(updatedReminder._id, { user: updatedReminder.user });
+    }
+  } catch (e) {
+    console.warn('[tts] generation failed on update', e?.message);
+  }
 });
 
 
@@ -375,9 +398,53 @@ exports.deleteReminder = async (req, res) => {
       return res.status(404).json({ message: 'Reminder not found' });
     }
 
+    // Note: audio is stored inside the reminder document; deletion removes it.
     res.json({ message: 'Reminder deleted successfully' });
   } catch (error) {
     console.error('Error deleting reminder:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Stream saved TTS audio for a reminder
+exports.getReminderTTS = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reminder = await Reminder.findOne({ _id: id, user: req.user._id }).select('tts');
+    if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
+    const audio = reminder.tts?.audio;
+    if (!audio?.data || !audio?.contentType) {
+      return res.status(404).json({ message: 'No TTS audio available' });
+    }
+    res.setHeader('Content-Type', audio.contentType || 'audio/mpeg');
+    if (audio.size) res.setHeader('Content-Length', String(audio.size));
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    return res.end(audio.data);
+  } catch (error) {
+    console.error('Error streaming TTS:', error);
+    return res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Ensure/generate TTS now and return current status and textHash
+exports.ensureReminderTTSNow = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reminder = await Reminder.findOne({ _id: id, user: req.user._id });
+    if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
+    const ensured = await ensureReminderTTS(reminder._id, { user: req.user });
+    return res.status(200).json({
+      success: true,
+      tts: {
+        status: ensured.tts?.status || 'pending',
+        textHash: ensured.tts?.textHash || null,
+        voiceId: ensured.tts?.voiceId || null,
+        generatedAt: ensured.tts?.generatedAt || null,
+        size: ensured.tts?.audio?.size || 0
+      }
+    });
+  } catch (error) {
+    console.error('Error ensuring TTS:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
