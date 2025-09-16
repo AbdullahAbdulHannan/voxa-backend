@@ -98,6 +98,24 @@ async function ensureReminderTTS(reminderId, { user, overrideVoiceId } = {}) {
   } catch (e) {
     reminder.tts.status = 'failed';
     await reminder.save();
+    try {
+      // Axios with responseType arraybuffer -> decode to string for better logging
+      const resp = e.response;
+      if (resp && resp.data) {
+        const buf = Buffer.from(resp.data);
+        const txt = buf.toString('utf8');
+        let parsed;
+        try { parsed = JSON.parse(txt); } catch { parsed = { raw: txt }; }
+        console.error('[tts] ElevenLabs error', resp.status, parsed);
+        const detail = parsed?.detail || parsed;
+        const msg = typeof detail === 'object' ? (detail.message || JSON.stringify(detail)) : String(detail);
+        const err = new Error(`TTS generation failed (${resp.status}): ${msg}`);
+        err.code = 'TTS_ELEVENLABS_ERROR';
+        throw err;
+      }
+    } catch (inner) {
+      // fallthrough
+    }
     throw e;
   }
 
