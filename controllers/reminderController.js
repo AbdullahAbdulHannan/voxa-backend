@@ -381,7 +381,7 @@ exports.updateReminder = asyncHandler(async (req, res) => {
   } catch (e) {
     console.warn('[tts] generation failed on update', e?.message);
   }
-};
+});
 
 
 // Delete a reminder
