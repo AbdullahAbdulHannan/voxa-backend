@@ -2,15 +2,22 @@ const axios = require('axios');
 const crypto = require('crypto');
 const Reminder = require('../models/reminderModel');
 
-function buildNotificationText(reminder, user) {
+function buildNotificationText(reminder, user, fixedMinutes = null) {
   // Simple text. You can enhance with user prefs or templates.
   const name = user?.fullname?.split(' ')[0] || 'there';
   const when = reminder.startDate ? new Date(reminder.startDate) : null;
   let timePart = '';
   if (when) {
-    const diffMin = Math.max(0, Math.round((when.getTime() - Date.now()) / 60000));
-    if (diffMin <= 1) timePart = 'in less than a minute';
-    else timePart = `in ${diffMin} minutes`;
+    if (typeof fixedMinutes === 'number' && fixedMinutes >= 0) {
+      // Use the supplied minutes (e.g., lead time) so voice matches the text timing
+      if (fixedMinutes <= 1) timePart = 'in less than a minute';
+      else timePart = `in ${fixedMinutes} minutes`;
+    } else {
+      // Legacy fallback based on current time (may drift)
+      const diffMin = Math.max(0, Math.round((when.getTime() - Date.now()) / 60000));
+      if (diffMin <= 1) timePart = 'in less than a minute';
+      else timePart = `in ${diffMin} minutes`;
+    }
   }
   if (reminder.type === 'Task') {
     return `Hey ${name}, your task ${reminder.title} is due ${timePart}.`;
@@ -32,7 +39,7 @@ function computeTextHash(text, voiceId) {
 async function generateElevenLabsAudio({ text, voiceId, modelId, format = 'mp3_44100_128' }) {
   const apiKey = process.env.ELEVENLABS_API_KEY;
   if (!apiKey) throw new Error('ELEVENLABS_API_KEY not configured');
-  const DEFAULT_VOICE_ID = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'XcXEQzuLXRU9RcfWzEJt';
+  const DEFAULT_VOICE_ID = process.env.ELEVENLABS_DEFAULT_VOICE_ID;
   const vid = voiceId || DEFAULT_VOICE_ID;
   if (!vid) throw new Error('Voice ID not provided or ELEVENLABS_DEFAULT_VOICE_ID missing');
 
@@ -65,10 +72,10 @@ async function generateElevenLabsAudio({ text, voiceId, modelId, format = 'mp3_4
   };
 }
 
-async function ensureReminderTTS(reminderId, { user, overrideVoiceId } = {}) {
+async function ensureReminderTTS(reminderId, { user, overrideVoiceId, fixedMinutes } = {}) {
   const reminder = await Reminder.findById(reminderId).populate('user', 'fullname');
   if (!reminder) throw new Error('Reminder not found');
-  const text = buildNotificationText(reminder, user || reminder.user);
+  const text = buildNotificationText(reminder, user || reminder.user, fixedMinutes);
   const voiceId = overrideVoiceId || reminder.tts?.voiceId || process.env.ELEVENLABS_DEFAULT_VOICE_ID;
   const hash = computeTextHash(text, voiceId);
 

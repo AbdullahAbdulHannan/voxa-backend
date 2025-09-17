@@ -381,7 +381,7 @@ exports.updateReminder = asyncHandler(async (req, res) => {
   } catch (e) {
     console.warn('[tts] generation failed on update', e?.message);
   }
-});
+};
 
 
 // Delete a reminder
@@ -432,7 +432,8 @@ exports.ensureReminderTTSNow = async (req, res) => {
     const { id } = req.params;
     const reminder = await Reminder.findOne({ _id: id, user: req.user._id });
     if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
-    const ensured = await ensureReminderTTS(reminder._id, { user: req.user });
+    const fixedMinutes = typeof req.body?.fixedMinutes === 'number' ? req.body.fixedMinutes : undefined;
+    const ensured = await ensureReminderTTS(reminder._id, { user: req.user, fixedMinutes });
     return res.status(200).json({
       success: true,
       tts: {
