@@ -11,13 +11,37 @@ exports.signup = async (req, res) => {
   const { fullname, email, password } = req.body;
   console.log("Incoming request body:", req.body);
   try {
+    // Basic input validation for clearer messages
+    if (!fullname || !email || !password) {
+      return res.status(400).json({ message: 'Full name, email and password are required' });
+    }
+    const emailRegex = /^\S+@\S+\.\S+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Please provide a valid email address' });
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+    }
+
     if (await User.findOne({ email })) return res.status(400).json({ message: 'Email already exists' });
     const user = await User.create({ fullname, email, password });
     const token = generateToken(user._id);
     res.status(201).json({ user: { id: user._id, fullname: user.fullname, email: user.email }, token });
   } catch (err) {
     console.error("Signup Error:", err);
-    res.status(500).json({ message: err });
+
+    // Duplicate key error (unique email)
+    if (err?.code === 11000) {
+      return res.status(400).json({ message: 'Email already exists' });
+    }
+
+    // Mongoose validation errors
+    if (err?.name === 'ValidationError') {
+      const messages = Object.values(err.errors).map(e => e.message);
+      return res.status(400).json({ message: messages[0] || 'Invalid input' });
+    }
+
+    res.status(500).json({ message: 'Server error during signup' });
   }
 };
 
@@ -25,6 +49,10 @@ exports.login = async (req, res) => {
   const { email, password, rememberMe } = req.body;
   
   try {
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
     // 1. Check if user exists
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
@@ -57,8 +85,7 @@ exports.login = async (req, res) => {
     console.error('Login error:', err);
     res.status(500).json({ 
       status: 'error',
-      message: 'An error occurred during login',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: 'An error occurred during login'
     });
   }
 };
