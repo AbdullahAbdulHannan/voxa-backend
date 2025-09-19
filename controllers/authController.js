@@ -46,7 +46,7 @@ exports.signup = async (req, res) => {
 };
 
 exports.login = async (req, res) => {
-  const { email, password, rememberMe } = req.body;
+  const { email, password } = req.body;
   
   try {
     if (!email || !password) {
@@ -65,8 +65,8 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid email or password' });
     }
 
-    // 3. Generate token with appropriate expiry
-    const token = generateToken(user._id, rememberMe);
+    // 3. Generate token (long-lived)
+    const token = generateToken(user._id);
     
     // 4. Remove password from output
     user.password = undefined;
@@ -170,8 +170,8 @@ exports.googleAuth = async (req, res) => {
       });
     }
 
-    // Generate JWT token
-    const token = generateToken(user._id, true); // Long-lived token for Google auth
+    // Generate JWT token (long-lived)
+    const token = generateToken(user._id);
 
     // Return user data and token
     res.status(200).json({
@@ -189,8 +189,7 @@ exports.googleAuth = async (req, res) => {
     console.error('Google auth error:', error);
     res.status(500).json({ 
       status: 'error',
-      message: 'Error authenticating with Google',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error authenticating with Google'
     });
   }
 };
