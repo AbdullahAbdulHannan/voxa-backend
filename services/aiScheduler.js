@@ -32,10 +32,19 @@ async function processBackgroundAI(reminderId, { user }) {
   // Smart scheduling for Column B (unscheduled Task/Meeting)
   if (!rem.isManualSchedule && (rem.type === 'Task' || rem.type === 'Meeting') && !rem.startDate) {
     let schedule = null;
+    let scheduleSource = null;
     // 1) Try Gemini full schedule
     try {
       if (gemini?.suggestFullScheduleWithGemini) {
         schedule = await gemini.suggestFullScheduleWithGemini({ userId: rem.user._id, now: new Date() });
+        if (schedule) {
+          scheduleSource = 'gemini';
+          console.log('[ai] schedule source: gemini', {
+            reminderId: String(rem._id),
+            startDateISO: schedule.startDateISO,
+            scheduleType: schedule.scheduleType,
+          });
+        }
       }
     } catch (e) {
       // swallow, fallback next
@@ -50,6 +59,12 @@ async function processBackgroundAI(reminderId, { user }) {
           scheduleDays: [],
           scheduleTime: { minutesBeforeStart: 10, fixedTime: null },
         };
+        scheduleSource = 'fallback';
+        console.warn('[ai] schedule source: fallback', {
+          reminderId: String(rem._id),
+          startDateISO: schedule.startDateISO,
+          scheduleType: schedule.scheduleType,
+        });
       }
     }
 
@@ -59,18 +74,32 @@ async function processBackgroundAI(reminderId, { user }) {
       rem.scheduleDays = Array.isArray(schedule.scheduleDays) ? schedule.scheduleDays : undefined;
       rem.scheduleTime = schedule.scheduleTime || undefined;
       rem.aiSuggested = true;
+      // final applied schedule log
+      console.log('[ai] schedule applied', {
+        reminderId: String(rem._id),
+        source: scheduleSource || 'unknown',
+        startDate: rem.startDate?.toISOString?.(),
+        scheduleType: rem.scheduleType,
+      });
     }
   }
 
   // Human-friendly notification line via Gemini, fallback to local builder
+  let lineSource = null;
   try {
     if (gemini?.generateNotificationLineWithGemini) {
       const line = await gemini.generateNotificationLineWithGemini({ reminder: rem, user: user || rem.user });
-      if (line) rem.aiNotificationLine = line;
+      if (line) {
+        rem.aiNotificationLine = line;
+        lineSource = 'gemini';
+        console.log('[ai] notification line source: gemini', { reminderId: String(rem._id) });
+      }
     }
   } catch {}
   if (!rem.aiNotificationLine) {
     rem.aiNotificationLine = buildNotificationText(rem, user || rem.user);
+    lineSource = lineSource || 'fallback';
+    console.warn('[ai] notification line source: fallback', { reminderId: String(rem._id) });
   }
 
   await rem.save();
