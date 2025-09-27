@@ -5,13 +5,19 @@ let GoogleGenerativeAI = null;
 try {
    GoogleGenerativeAI  = require('@google/generative-ai');
 } catch (e) {
-  // Dependency might not be installed yet; callers should handle
+  console.warn('[gemini] SDK load failed:', e?.message);
 }
 
 function getModel() {
-  if (!GoogleGenerativeAI) throw new Error('Gemini SDK not installed');
+  if (!GoogleGenerativeAI) {
+    console.warn('[gemini] SDK not installed/loaded');
+    throw new Error('Gemini SDK not installed');
+  }
   const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GOOGLE_GEMINI_API_KEY not configured');
+  if (!apiKey) {
+    console.warn('[gemini] Missing GOOGLE_GEMINI_API_KEY');
+    throw new Error('GOOGLE_GEMINI_API_KEY not configured');
+  }
   const client = new GoogleGenerativeAI(apiKey);
   return client.getGenerativeModel({ model: 'gemini-2.5-flash' });
 }
@@ -61,8 +67,14 @@ If no acceptable schedule within the next 7 days is possible for one-day, select
 
   const userContent = `Column A:\n${JSON.stringify(colA, null, 2)}\nNow (UTC): ${now.toISOString()}`;
 
-  const result = await model.generateContent([{ text: systemPrompt }, { text: userContent }]);
-  const raw = result?.response?.text?.() || result?.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  let raw = '';
+  try {
+    const result = await model.generateContent([{ text: systemPrompt }, { text: userContent }]);
+    raw = result?.response?.text?.() || result?.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  } catch (e) {
+    console.warn('[gemini] generate schedule failed:', e?.message);
+    throw e;
+  }
   const text = String(raw).trim();
   let obj = null;
   try {
@@ -107,8 +119,14 @@ async function generateNotificationLineWithGemini({ reminder, user }) {
   const systemPrompt = `Write a single, friendly notification line addressed to the user by first name. Keep it under 140 characters. Include the task/meeting title concisely and a time hint if a start time is available. Return plain text only.`;
   const userContent = `User first name: ${name}\nType: ${type}\nTitle: ${title}\nStart (UTC ISO): ${when || 'unscheduled'}`;
 
-  const result = await model.generateContent([{ text: systemPrompt }, { text: userContent }]);
-  const lineRaw = result?.response?.text?.() || result?.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  let lineRaw = '';
+  try {
+    const result = await model.generateContent([{ text: systemPrompt }, { text: userContent }]);
+    lineRaw = result?.response?.text?.() || result?.response?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  } catch (e) {
+    console.warn('[gemini] generate line failed:', e?.message);
+    throw e;
+  }
   const oneLine = String(lineRaw).trim().replace(/\s+/g, ' ');
   return oneLine.split('\n')[0];
 }

@@ -1,7 +1,9 @@
 const Reminder = require('../models/reminderModel');
 const { buildNotificationText, ensureReminderTTS } = require('../utils/ttsService');
 let gemini;
-try { gemini = require('./geminiService'); } catch {}
+try { gemini = require('./geminiService'); } catch (e) {
+  console.warn('[ai] gemini service module failed to load; falling back if needed', e?.message);
+}
 
 // Heuristic fallback: find a free 60-minute slot within next 7 days (future-only)
 async function findSmartSlot({ userId, now = new Date() }) {
@@ -45,9 +47,11 @@ async function processBackgroundAI(reminderId, { user }) {
             scheduleType: schedule.scheduleType,
           });
         }
+      } else {
+        console.warn('[ai] gemini service unavailable (no suggestFullScheduleWithGemini), using fallback');
       }
     } catch (e) {
-      // swallow, fallback next
+      console.warn('[ai] gemini scheduling error; using fallback', e?.message);
     }
     // 2) Fallback heuristic
     if (!schedule) {
@@ -94,8 +98,12 @@ async function processBackgroundAI(reminderId, { user }) {
         lineSource = 'gemini';
         console.log('[ai] notification line source: gemini', { reminderId: String(rem._id) });
       }
+    } else {
+      console.warn('[ai] gemini service unavailable (no generateNotificationLineWithGemini), using fallback');
     }
-  } catch {}
+  } catch (e) {
+    console.warn('[ai] gemini notification error; using fallback', e?.message);
+  }
   if (!rem.aiNotificationLine) {
     rem.aiNotificationLine = buildNotificationText(rem, user || rem.user);
     lineSource = lineSource || 'fallback';
