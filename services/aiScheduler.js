@@ -39,7 +39,11 @@ async function processBackgroundAI(reminderId, { user }) {
     // 1) Try Gemini full schedule
     try {
       if (gemini?.suggestFullScheduleWithGemini) {
-        schedule = await gemini.suggestFullScheduleWithGemini({ userId: rem.user._id, now: new Date() });
+        schedule = await gemini.suggestFullScheduleWithGemini({
+          userId: rem.user._id,
+          now: new Date(),
+          item: { type: rem.type, title: rem.title, description: rem.description || '' }
+        });
         if (schedule) {
           scheduleSource = 'gemini';
           console.log('[ai] schedule source: gemini', {

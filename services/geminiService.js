@@ -3,7 +3,12 @@ const Calendar = require('../models/calendarModel');
 
 let GoogleGenerativeAI = null;
 try {
-   GoogleGenerativeAI  = require('@google/generative-ai');
+  // CommonJS require of a package that exports named class
+  const mod = require('@google/generative-ai');
+  GoogleGenerativeAI = mod?.GoogleGenerativeAI || null;
+  if (!GoogleGenerativeAI) {
+    console.warn('[gemini] SDK loaded but GoogleGenerativeAI export missing');
+  }
 } catch (e) {
   console.warn('[gemini] SDK load failed:', e?.message);
 }
@@ -52,20 +57,24 @@ async function buildColumnA({ userId, now = new Date() }) {
 }
 
 // Ask Gemini to fully determine the schedule for an unscheduled task/meeting
+// item: { type: 'Task'|'Meeting', title: string, description?: string }
 // Returns: { startDateISO, scheduleType: 'one-day'|'routine', scheduleDays: number[], scheduleTime: { minutesBeforeStart?: number, fixedTime?: string } } | null
-async function suggestFullScheduleWithGemini({ userId, now = new Date() }) {
+async function suggestFullScheduleWithGemini({ userId, now = new Date(), item = {} }) {
   const colA = await buildColumnA({ userId, now });
   const model = getModel();
-  const systemPrompt = `You are an expert scheduler. Given Column A (existing items with ISO UTC timestamps for next 7 days) and current time, choose a smart schedule for a new item:
+  const systemPrompt = `You are an expert scheduler. Given Column A (existing items with ISO UTC timestamps for next 7 days), the current time, and the NEW ITEM details, choose a smart schedule for the new item.
+
+Decision heuristics:
+- If the NEW ITEM's title suggests a recurring habit or routine (e.g., pray, namaz, prayer, workout, gym, run, walk, meditation, study, read, take medicine, hydrate/water plants, journal), prefer scheduleType "routine" with a fixedTime (HH:mm, 24h) during typical waking hours (06:00–22:00). For daily routines, scheduleDays should be an empty array [].
 - If the item seems one-off, choose scheduleType "one-day" and propose a future startDateISO within 7 days.
-- If it seems recurring, choose scheduleType "routine" with a daily or specific days pattern and a fixedTime (HH:mm, 24h) in local user's typical work hours (08:00-20:00). For daily routines, scheduleDays should be an empty array [].
+- If it seems recurring but not daily, choose specific scheduleDays (0=Sun..6=Sat) and a fixedTime.
 - Ensure the startDateISO is in the future within the next 7 days if scheduleType is one-day.
 - Avoid conflicts with Column A and leave at least 30 minutes buffer.
 - Output ONLY strict JSON with the following exact shape and no extra text:
 {"startDateISO":"YYYY-MM-DDTHH:MM:SSZ or null for routine","scheduleType":"one-day|routine","scheduleDays":[ints 0-6],"scheduleTime":{"minutesBeforeStart":int or null,"fixedTime":"HH:MM" or null}}
 If no acceptable schedule within the next 7 days is possible for one-day, select routine with an appropriate fixed time. If absolutely no suggestion is possible, output {"startDateISO":null,"scheduleType":"one-day","scheduleDays":[],"scheduleTime":{"minutesBeforeStart":null,"fixedTime":null}}`;
 
-  const userContent = `Column A:\n${JSON.stringify(colA, null, 2)}\nNow (UTC): ${now.toISOString()}`;
+  const userContent = `Column A:\n${JSON.stringify(colA, null, 2)}\nNow (UTC): ${now.toISOString()}\nNEW ITEM:\n${JSON.stringify({ type: item.type, title: item.title, description: item.description || '' }, null, 2)}`;
 
   let raw = '';
   try {
