@@ -72,21 +72,29 @@ exports.createReminder = async (req, res) => {
       console.warn('[tts] generation failed on create', e?.message);
     }
 
-    res.status(201).json({
-      success: true,
-      data: populatedReminder,
-    });
-
-    // Background AI processing (non-blocking)
-    setImmediate(() => {
+    const useSync = process.env.USE_SYNC_AI === '1';
+    if (useSync && ai?.processBackgroundAI) {
+      console.log('[ai] USE_SYNC_AI enabled: processing AI synchronously on create');
       try {
-        if (ai?.processBackgroundAI) {
-          ai.processBackgroundAI(populatedReminder._id, { user }).catch(err => console.warn('[ai] background failed', err?.message));
-        }
-      } catch (err) {
-        console.warn('[ai] scheduler not available', err?.message);
+        const { reminder: afterAI, meta } = await ai.processBackgroundAI(populatedReminder._id, { user });
+        return res.status(201).json({ success: true, data: afterAI || populatedReminder, aiMeta: meta || null });
+      } catch (e) {
+        console.warn('[ai] sync AI failed on create; returning base reminder', e?.message);
+        return res.status(201).json({ success: true, data: populatedReminder, aiMeta: { error: e?.message } });
       }
-    });
+    } else {
+      res.status(201).json({ success: true, data: populatedReminder });
+      // Background AI processing (non-blocking)
+      setImmediate(() => {
+        try {
+          if (ai?.processBackgroundAI) {
+            ai.processBackgroundAI(populatedReminder._id, { user }).catch(err => console.warn('[ai] background failed', err?.message));
+          }
+        } catch (err) {
+          console.warn('[ai] scheduler not available', err?.message);
+        }
+      });
+    }
   } catch (error) {
     console.error('createReminder error', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to create reminder' });
@@ -155,18 +163,29 @@ exports.updateReminder = async (req, res) => {
       console.warn('[tts] generation failed on update', e?.message);
     }
 
-    res.status(200).json({ success: true, data: updated });
-
-    // Background AI processing (non-blocking)
-    setImmediate(() => {
+    const useSync = process.env.USE_SYNC_AI === '1';
+    if (useSync && ai?.processBackgroundAI) {
+      console.log('[ai] USE_SYNC_AI enabled: processing AI synchronously on update');
       try {
-        if (ai?.processBackgroundAI) {
-          ai.processBackgroundAI(updated._id, { user: updated.user }).catch(err => console.warn('[ai] background update failed', err?.message));
-        }
-      } catch (err) {
-        console.warn('[ai] scheduler not available', err?.message);
+        const { reminder: afterAI, meta } = await ai.processBackgroundAI(updated._id, { user: updated.user });
+        return res.status(200).json({ success: true, data: afterAI || updated, aiMeta: meta || null });
+      } catch (e) {
+        console.warn('[ai] sync AI failed on update; returning base reminder', e?.message);
+        return res.status(200).json({ success: true, data: updated, aiMeta: { error: e?.message } });
       }
-    });
+    } else {
+      res.status(200).json({ success: true, data: updated });
+      // Background AI processing (non-blocking)
+      setImmediate(() => {
+        try {
+          if (ai?.processBackgroundAI) {
+            ai.processBackgroundAI(updated._id, { user: updated.user }).catch(err => console.warn('[ai] background update failed', err?.message));
+          }
+        } catch (err) {
+          console.warn('[ai] scheduler not available', err?.message);
+        }
+      });
+    }
   } catch (error) {
     console.error('updateReminder error', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to update reminder' });

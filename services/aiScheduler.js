@@ -32,9 +32,10 @@ async function processBackgroundAI(reminderId, { user }) {
   if (!rem) return null;
 
   // Smart scheduling for Column B (unscheduled Task/Meeting)
+  let scheduleSource = null;
   if (!rem.isManualSchedule && (rem.type === 'Task' || rem.type === 'Meeting') && !rem.startDate) {
     let schedule = null;
-    let scheduleSource = null;
+    scheduleSource = null;
     // 1) Try Gemini full schedule
     try {
       if (gemini?.suggestFullScheduleWithGemini) {
@@ -115,7 +116,7 @@ async function processBackgroundAI(reminderId, { user }) {
   if (rem.startDate) {
     try { await ensureReminderTTS(rem._id, { user: user || rem.user }); } catch {}
   }
-  return rem;
+  return { reminder: rem, meta: { scheduleSource: scheduleSource || null, lineSource: lineSource || null } };
 }
 
 module.exports = { findSmartSlot, processBackgroundAI };
