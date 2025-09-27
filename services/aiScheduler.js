@@ -1,0 +1,84 @@
+const Reminder = require('../models/reminderModel');
+const { buildNotificationText, ensureReminderTTS } = require('../utils/ttsService');
+let gemini;
+try { gemini = require('./geminiService'); } catch {}
+
+// Heuristic fallback: find a free 60-minute slot within next 7 days (future-only)
+async function findSmartSlot({ userId, now = new Date() }) {
+  const startHour = 9;   // 9 AM
+  const endHour = 18;    // 6 PM
+  const oneHour = 60 * 60 * 1000;
+  const horizon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+  const existing = await Reminder.find({ user: userId, startDate: { $gte: now, $lte: horizon } })
+    .select('startDate')
+    .lean();
+  const busy = new Set(existing.filter(e => e.startDate).map(e => new Date(e.startDate).toISOString()));
+
+  for (let d = new Date(now.getTime() + oneHour); d <= horizon; d = new Date(d.getTime() + oneHour)) {
+    const hour = d.getHours();
+    if (hour < startHour || hour >= endHour) continue;
+    const iso = d.toISOString();
+    if (!busy.has(iso)) return new Date(iso);
+  }
+  return null;
+}
+
+// Background processing for a reminder: smart schedule + human-friendly line + TTS
+async function processBackgroundAI(reminderId, { user }) {
+  const rem = await Reminder.findById(reminderId).populate('user', 'fullname');
+  if (!rem) return null;
+
+  // Smart scheduling for Column B (unscheduled Task/Meeting)
+  if (!rem.isManualSchedule && (rem.type === 'Task' || rem.type === 'Meeting') && !rem.startDate) {
+    let schedule = null;
+    // 1) Try Gemini full schedule
+    try {
+      if (gemini?.suggestFullScheduleWithGemini) {
+        schedule = await gemini.suggestFullScheduleWithGemini({ userId: rem.user._id, now: new Date() });
+      }
+    } catch (e) {
+      // swallow, fallback next
+    }
+    // 2) Fallback heuristic
+    if (!schedule) {
+      const suggested = await findSmartSlot({ userId: rem.user._id, now: new Date() }).catch(() => null);
+      if (suggested) {
+        schedule = {
+          startDateISO: suggested.toISOString(),
+          scheduleType: 'one-day',
+          scheduleDays: [],
+          scheduleTime: { minutesBeforeStart: 10, fixedTime: null },
+        };
+      }
+    }
+
+    if (schedule) {
+      if (schedule.startDateISO) rem.startDate = new Date(schedule.startDateISO);
+      rem.scheduleType = schedule.scheduleType || undefined;
+      rem.scheduleDays = Array.isArray(schedule.scheduleDays) ? schedule.scheduleDays : undefined;
+      rem.scheduleTime = schedule.scheduleTime || undefined;
+      rem.aiSuggested = true;
+    }
+  }
+
+  // Human-friendly notification line via Gemini, fallback to local builder
+  try {
+    if (gemini?.generateNotificationLineWithGemini) {
+      const line = await gemini.generateNotificationLineWithGemini({ reminder: rem, user: user || rem.user });
+      if (line) rem.aiNotificationLine = line;
+    }
+  } catch {}
+  if (!rem.aiNotificationLine) {
+    rem.aiNotificationLine = buildNotificationText(rem, user || rem.user);
+  }
+
+  await rem.save();
+
+  if (rem.startDate) {
+    try { await ensureReminderTTS(rem._id, { user: user || rem.user }); } catch {}
+  }
+  return rem;
+}
+
+module.exports = { findSmartSlot, processBackgroundAI };
