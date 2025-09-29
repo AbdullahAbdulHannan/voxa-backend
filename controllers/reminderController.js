@@ -21,6 +21,7 @@ function pickReminderFields(src = {}) {
     'scheduleType',
     'scheduleTime',
     'scheduleDays',
+    'notificationPreferenceMinutes',
   ];
   for (const k of allowed) {
     if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = src[k];
@@ -43,6 +44,7 @@ exports.createReminder = async (req, res) => {
       scheduleType,
       scheduleTime,
       scheduleDays,
+      notificationPreferenceMinutes,
     } = req.body || {};
 
     const payload = {
@@ -57,7 +59,21 @@ exports.createReminder = async (req, res) => {
       scheduleType,
       scheduleTime,
       scheduleDays,
+      notificationPreferenceMinutes: typeof notificationPreferenceMinutes === 'number' ? notificationPreferenceMinutes : 10,
     };
+
+    // Enforce Meeting flow: manual-only with required startDate and per-item minutes
+    if (payload.type === 'Meeting') {
+      if (!payload.startDate) {
+        return res.status(400).json({ success: false, message: 'Start date is required for meetings' });
+      }
+      payload.isManualSchedule = true;
+      payload.scheduleType = 'one-day';
+      const pref = typeof notificationPreferenceMinutes === 'number' ? notificationPreferenceMinutes : (scheduleTime?.minutesBeforeStart ?? 10);
+      payload.scheduleTime = { minutesBeforeStart: pref };
+      payload.scheduleDays = [];
+      payload.notificationPreferenceMinutes = pref;
+    }
 
     // Persist
     const created = await Reminder.create(payload);

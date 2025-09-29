@@ -31,9 +31,9 @@ async function processBackgroundAI(reminderId, { user }) {
   const rem = await Reminder.findById(reminderId).populate('user', 'fullname');
   if (!rem) return null;
 
-  // Smart scheduling for Column B (unscheduled Task/Meeting)
+  // Smart scheduling for Column B (unscheduled Tasks only; Meetings are manual-only)
   let scheduleSource = null;
-  if (!rem.isManualSchedule && (rem.type === 'Task' || rem.type === 'Meeting') && !rem.startDate) {
+  if (!rem.isManualSchedule && rem.type === 'Task' && !rem.startDate) {
     let schedule = null;
     scheduleSource = null;
     // 1) Try Gemini full schedule
@@ -82,6 +82,10 @@ async function processBackgroundAI(reminderId, { user }) {
       rem.scheduleType = schedule.scheduleType || undefined;
       rem.scheduleDays = Array.isArray(schedule.scheduleDays) ? schedule.scheduleDays : undefined;
       rem.scheduleTime = schedule.scheduleTime || undefined;
+      if (rem.scheduleType === 'one-day') {
+        const pref = (schedule.scheduleTime && typeof schedule.scheduleTime.minutesBeforeStart === 'number') ? schedule.scheduleTime.minutesBeforeStart : 10;
+        rem.notificationPreferenceMinutes = pref;
+      }
       rem.aiSuggested = true;
       // final applied schedule log
       console.log('[ai] schedule applied', {

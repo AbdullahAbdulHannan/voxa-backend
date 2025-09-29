@@ -63,6 +63,9 @@ const reminderSchema = new mongoose.Schema({
   aiSuggested: { type: Boolean, default: false },
   aiNotificationLine: { type: String },
 
+  // Per-item notification preference in minutes (used for Meetings and one-day Tasks). Default 10.
+  notificationPreferenceMinutes: { type: Number, default: 10, min: 0 },
+
   isCompleted: {
     type: Boolean,
     default: false
