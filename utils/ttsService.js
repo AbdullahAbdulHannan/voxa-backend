@@ -3,17 +3,19 @@ const crypto = require('crypto');
 const Reminder = require('../models/reminderModel');
 
 function buildNotificationText(reminder, user, fixedMinutes = null) {
-  // Simple text. You can enhance with user prefs or templates.
+  // Prefer Gemini line when available and no explicit timing override was requested
+  if ((fixedMinutes === null || typeof fixedMinutes === 'undefined') && reminder.aiNotificationLine) {
+    return reminder.aiNotificationLine;
+  }
+
   const name = user?.fullname?.split(' ')[0] || 'there';
   const when = reminder.startDate ? new Date(reminder.startDate) : null;
   let timePart = '';
   if (when) {
     if (typeof fixedMinutes === 'number' && fixedMinutes >= 0) {
-      // Use the supplied minutes (e.g., lead time) so voice matches the text timing
       if (fixedMinutes <= 1) timePart = 'in less than a minute';
       else timePart = `in ${fixedMinutes} minutes`;
     } else {
-      // Legacy fallback based on current time (may drift)
       const diffMin = Math.max(0, Math.round((when.getTime() - Date.now()) / 60000));
       if (diffMin <= 1) timePart = 'in less than a minute';
       else timePart = `in ${diffMin} minutes`;
