@@ -78,6 +78,13 @@ async function ensureReminderTTS(reminderId, { user, overrideVoiceId, fixedMinut
   const reminder = await Reminder.findById(reminderId).populate('user', 'fullname');
   if (!reminder) throw new Error('Reminder not found');
   const text = buildNotificationText(reminder, user || reminder.user, fixedMinutes);
+  // If aiNotificationLine is missing, set it now to ensure consistency for both text and voice
+  try {
+    if (!reminder.aiNotificationLine) {
+      reminder.aiNotificationLine = text;
+      await reminder.save();
+    }
+  } catch {}
   const voiceId = overrideVoiceId || reminder.tts?.voiceId || process.env.ELEVENLABS_DEFAULT_VOICE_ID;
   const hash = computeTextHash(text, voiceId);
 

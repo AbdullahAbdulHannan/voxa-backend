@@ -62,6 +62,10 @@ exports.createReminder = async (req, res) => {
       notificationPreferenceMinutes: typeof notificationPreferenceMinutes === 'number' ? notificationPreferenceMinutes : 10,
     };
 
+    // Capture client-reported timezone for better AI lines
+    const clientTz = (req.headers['x-client-timezone'] || req.headers['X-Client-Timezone'] || '').toString().trim();
+    if (clientTz) payload.timezone = clientTz;
+
     // Enforce Meeting flow: manual-only with required startDate and per-item minutes
     if (payload.type === 'Meeting') {
       if (!payload.startDate) {
@@ -78,6 +82,22 @@ exports.createReminder = async (req, res) => {
     // Persist
     const created = await Reminder.create(payload);
     const populatedReminder = await Reminder.findById(created._id).populate('user', 'fullname email');
+
+    // If Meeting, synchronously generate aiNotificationLine (non-blocking schedule still manual)
+    try {
+      if (populatedReminder.type === 'Meeting') {
+        if (ai?.generateNotificationLineWithGemini) {
+          const tz = clientTz || populatedReminder.timezone;
+          const line = await ai.generateNotificationLineWithGemini({ reminder: populatedReminder, user, timezone: tz });
+          if (line) {
+            populatedReminder.aiNotificationLine = line;
+            await populatedReminder.save();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ai] meeting line generation failed', e?.message);
+    }
 
     // Fire-and-forget TTS generation only when we already have a startDate
     try {

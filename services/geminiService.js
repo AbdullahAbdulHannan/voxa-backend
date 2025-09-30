@@ -119,14 +119,15 @@ If no acceptable schedule within the next 7 days is possible for one-day, select
   return schedule;
 }
 
-async function generateNotificationLineWithGemini({ reminder, user }) {
+async function generateNotificationLineWithGemini({ reminder, user, timezone }) {
   const model = getModel();
   const name = (user?.fullname || '').split(' ')[0] || 'there';
   const when = reminder.startDate ? new Date(reminder.startDate).toISOString() : null;
   const type = reminder.type;
   const title = reminder.title || '';
-  const systemPrompt = `Write a single, friendly notification line addressed to the user by first name. Keep it under 140 characters. Include the task/meeting title concisely and a time hint if a start time is available. Return plain text only.`;
-  const userContent = `User first name: ${name}\nType: ${type}\nTitle: ${title}\nStart (UTC ISO): ${when || 'unscheduled'}`;
+  const tz = timezone || reminder.timezone || null;
+  const systemPrompt = `Write a single, friendly notification line addressed to the user by first name. Keep it under 140 characters. Include the task/meeting title concisely and a time hint if a start time is available. Return plain text only. If a timezone is provided, reflect the local time in that timezone (do not include the zone abbreviation in the text).`;
+  const userContent = `User first name: ${name}\nType: ${type}\nTitle: ${title}\nStart (UTC ISO): ${when || 'unscheduled'}${tz ? `\nPreferred Timezone: ${tz}` : ''}`;
 
   let lineRaw = '';
   try {

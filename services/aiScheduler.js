@@ -101,7 +101,7 @@ async function processBackgroundAI(reminderId, { user }) {
   let lineSource = null;
   try {
     if (gemini?.generateNotificationLineWithGemini) {
-      const line = await gemini.generateNotificationLineWithGemini({ reminder: rem, user: user || rem.user });
+      const line = await gemini.generateNotificationLineWithGemini({ reminder: rem, user: user || rem.user, timezone: rem.timezone });
       if (line) {
         rem.aiNotificationLine = line;
         lineSource = 'gemini';
