@@ -62,9 +62,6 @@ exports.createReminder = async (req, res) => {
       notificationPreferenceMinutes: typeof notificationPreferenceMinutes === 'number' ? notificationPreferenceMinutes : 10,
     };
 
-    // Capture client-reported timezone for better AI lines
-    const clientTz = (req.headers['x-client-timezone'] || req.headers['X-Client-Timezone'] || '').toString().trim();
-    if (clientTz) payload.timezone = clientTz;
 
     // Enforce Meeting flow: manual-only with required startDate and per-item minutes
     if (payload.type === 'Meeting') {
@@ -87,8 +84,7 @@ exports.createReminder = async (req, res) => {
     try {
       if (populatedReminder.type === 'Meeting') {
         if (ai?.generateNotificationLineWithGemini) {
-          const tz = clientTz || populatedReminder.timezone;
-          const line = await ai.generateNotificationLineWithGemini({ reminder: populatedReminder, user, timezone: tz });
+          const line = await ai.generateNotificationLineWithGemini({ reminder: populatedReminder, user });
           if (line) {
             populatedReminder.aiNotificationLine = line;
             await populatedReminder.save();
