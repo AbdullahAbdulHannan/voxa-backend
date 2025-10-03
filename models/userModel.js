@@ -47,6 +47,11 @@ const userSchema = new mongoose.Schema({
     enum: ['user', 'admin'],
     default: 'user'
   },
+  // Permissions/preferences
+  locationPermissions: {
+    backgroundGranted: { type: Boolean, default: false },
+    updatedAt: { type: Date },
+  },
   active: {
     type: Boolean,
     default: true,

@@ -20,6 +20,9 @@ router.post(
     body('location').optional().isObject().withMessage('Location must be an object'),
     body('location.name').optional().trim(),
     body('location.link').optional().isURL().withMessage('Invalid location URL'),
+    // Location-based fields
+    body('day').optional().isIn(['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']).withMessage('Invalid day'),
+    body('status').optional().isIn(['active','expired','completed']).withMessage('Invalid status'),
 
     // New scheduling fields
     body('isManualSchedule').optional().isBoolean().withMessage('isManualSchedule must be a boolean'),

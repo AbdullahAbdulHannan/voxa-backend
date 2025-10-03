@@ -39,6 +39,17 @@ const reminderSchema = new mongoose.Schema({
       lng: Number
     }
   },
+  // Location-based reminder new fields
+  day: { type: String, enum: ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'], default: undefined },
+  status: { type: String, enum: ['active','expired','completed'], default: 'active' },
+  lastTriggeredAt: { type: Date, default: null },
+  triggeredLocation: {
+    lat: { type: Number },
+    lng: { type: Number },
+    placeId: { type: String },
+    name: { type: String },
+    rating: { type: Number },
+  },
   // New scheduling fields
   isManualSchedule: { type: Boolean, default: false },
   // one-day or routine (only applicable when isManualSchedule is true)
@@ -96,5 +107,8 @@ const reminderSchema = new mongoose.Schema({
 // Indexes for better query performance (future schedules within 7 days, by user)
 reminderSchema.index({ user: 1, startDate: 1 });
 reminderSchema.index({ user: 1, isManualSchedule: 1 });
+// Indexes to query active location reminders and throttle triggers
+reminderSchema.index({ user: 1, type: 1, status: 1 });
+reminderSchema.index({ user: 1, lastTriggeredAt: 1 });
 
 module.exports = mongoose.model('Reminder', reminderSchema);

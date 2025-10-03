@@ -3,29 +3,17 @@ const crypto = require('crypto');
 const Reminder = require('../models/reminderModel');
 
 function buildNotificationText(reminder, user, fixedMinutes = null) {
-  // Prefer Gemini line when available and no explicit timing override was requested
-  if ((fixedMinutes === null || typeof fixedMinutes === 'undefined') && reminder.aiNotificationLine) {
+  // Always prefer AI line when present for voice parity with text
+  if (reminder.aiNotificationLine) {
     return reminder.aiNotificationLine;
   }
 
   const name = user?.fullname?.split(' ')[0] || 'there';
-  const when = reminder.startDate ? new Date(reminder.startDate) : null;
-  let timePart = '';
-  if (when) {
-    if (typeof fixedMinutes === 'number' && fixedMinutes >= 0) {
-      if (fixedMinutes <= 1) timePart = 'in less than a minute';
-      else timePart = `in ${fixedMinutes} minutes`;
-    } else {
-      const diffMin = Math.max(0, Math.round((when.getTime() - Date.now()) / 60000));
-      if (diffMin <= 1) timePart = 'in less than a minute';
-      else timePart = `in ${diffMin} minutes`;
-    }
-  }
   if (reminder.type === 'Task') {
-    return `Hey ${name}, your task ${reminder.title} is due ${timePart}.`;
+    return `Hey ${name}, reminder: ${reminder.title}.`;
   }
   if (reminder.type === 'Meeting') {
-    return `Hey ${name}, you have a meeting ${reminder.title} ${timePart}.`;
+    return `Hey ${name}, reminder for meeting: ${reminder.title}.`;
   }
   if (reminder.type === 'Location') {
     const loc = reminder.location?.name || 'your saved place';
@@ -78,13 +66,6 @@ async function ensureReminderTTS(reminderId, { user, overrideVoiceId, fixedMinut
   const reminder = await Reminder.findById(reminderId).populate('user', 'fullname');
   if (!reminder) throw new Error('Reminder not found');
   const text = buildNotificationText(reminder, user || reminder.user, fixedMinutes);
-  // If aiNotificationLine is missing, set it now to ensure consistency for both text and voice
-  try {
-    if (!reminder.aiNotificationLine) {
-      reminder.aiNotificationLine = text;
-      await reminder.save();
-    }
-  } catch {}
   const voiceId = overrideVoiceId || reminder.tts?.voiceId || process.env.ELEVENLABS_DEFAULT_VOICE_ID;
   const hash = computeTextHash(text, voiceId);
 

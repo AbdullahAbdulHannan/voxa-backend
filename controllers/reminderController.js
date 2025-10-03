@@ -15,6 +15,11 @@ function pickReminderFields(src = {}) {
     'icon',
     'startDate',
     'location',
+    // Location-based fields
+    'day',
+    'status',
+    'lastTriggeredAt',
+    'triggeredLocation',
     'isCompleted',
     // New scheduling fields
     'isManualSchedule',
@@ -40,6 +45,8 @@ exports.createReminder = async (req, res) => {
       icon,
       startDate,
       location,
+      day,
+      status,
       isManualSchedule,
       scheduleType,
       scheduleTime,
@@ -55,6 +62,8 @@ exports.createReminder = async (req, res) => {
       icon,
       startDate: startDate ? new Date(startDate) : undefined,
       location,
+      day,
+      status,
       isManualSchedule: !!isManualSchedule,
       scheduleType,
       scheduleTime,
@@ -80,9 +89,9 @@ exports.createReminder = async (req, res) => {
     const created = await Reminder.create(payload);
     const populatedReminder = await Reminder.findById(created._id).populate('user', 'fullname email');
 
-    // If Meeting, synchronously generate aiNotificationLine (non-blocking schedule still manual)
+    // If Meeting or manual one-day Task, synchronously generate aiNotificationLine so clients can use it immediately
     try {
-      if (populatedReminder.type === 'Meeting') {
+      if (populatedReminder.type === 'Meeting' || (populatedReminder.type === 'Task' && populatedReminder.isManualSchedule && populatedReminder.scheduleType === 'one-day')) {
         if (ai?.generateNotificationLineWithGemini) {
           const line = await ai.generateNotificationLineWithGemini({ reminder: populatedReminder, user });
           if (line) {
