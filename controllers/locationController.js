@@ -142,9 +142,12 @@ exports.scanAndTrigger = async (req, res) => {
       out.push({
         reminderId: updated._id,
         title: updated.title,
+        body: updated.aiNotificationLine || null,
+        bodyFallback: `Reminder: You're near a place for ${updated.title}.`,
         place: { id: place.place_id, name: place.name, rating: place.rating, distanceMeters: dist },
         ttsTextHash: textHash,
       });
+      console.log('[location] triggered', { id: String(updated._id), title: updated.title, dist });
     }
 
     console.log('[location] scanAndTrigger done', { count: out.length, skipped: out.filter(r => r.skipped).length });
