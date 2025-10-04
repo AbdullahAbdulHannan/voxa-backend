@@ -52,6 +52,7 @@ exports.scanAndTrigger = async (req, res) => {
     const userId = user._id || user.id || user;
     const { lat, lng, radius = 500 } = req.body || {};
     const now = new Date();
+    const MAX_METERS = Math.max(10, parseInt(process.env.LOCATION_MAX_TRIGGER_METERS || '60', 10));
     console.log('[location] scanAndTrigger start', { userId: String(userId), lat, lng, radius });
 
     // Active, not completed Location reminders
@@ -90,6 +91,10 @@ exports.scanAndTrigger = async (req, res) => {
       const dist = (typeof place?.geometry?.location?.lat === 'number' && typeof place?.geometry?.location?.lng === 'number')
         ? Math.round(haversineMeters(lat, lng, place.geometry.location.lat, place.geometry.location.lng))
         : null;
+      if (!(typeof dist === 'number') || dist > MAX_METERS) {
+        out.push({ reminderId: r._id, skipped: true, reason: 'too_far', distanceMeters: dist, maxMeters: MAX_METERS, place: { id: place.place_id, name: place.name } });
+        continue;
+      }
 
       // Collision avoidance with Task/Meeting notifications in ±5min
       const collision = await hasCollisionWithinFiveMin(userId, now);
