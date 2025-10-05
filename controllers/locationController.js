@@ -65,11 +65,17 @@ exports.scanAndTrigger = async (req, res) => {
     console.log('[location] active reminders', reminders.length);
 
     const dayStr = getDayString(now);
+    const todayIdx = now.getDay(); // 0..6
     const out = [];
 
     for (const r of reminders) {
-      // Day condition
-      if (r.day && r.day !== dayStr) { out.push({ reminderId: r._id, skipped: true, reason: 'day_mismatch', expectedDay: r.day, today: dayStr }); continue; }
+      // Day condition: prefer scheduleDays array; fallback to legacy 'day' string
+      if (Array.isArray(r.scheduleDays) && r.scheduleDays.length > 0) {
+        if (!r.scheduleDays.includes(todayIdx)) { out.push({ reminderId: r._id, skipped: true, reason: 'day_mismatch', scheduleDays: r.scheduleDays, todayIdx }); continue; }
+      } else if (r.day && r.day !== dayStr) {
+        out.push({ reminderId: r._id, skipped: true, reason: 'day_mismatch', expectedDay: r.day, today: dayStr });
+        continue;
+      }
       // Anti-spam throttle (>= 90 minutes)
       if (r.lastTriggeredAt) {
         const deltaMin = (now - new Date(r.lastTriggeredAt)) / 60000;
