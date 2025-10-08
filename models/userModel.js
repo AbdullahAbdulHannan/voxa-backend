@@ -22,6 +22,20 @@ const userSchema = new mongoose.Schema({
     minlength: [8, 'Password must be at least 8 characters long'],
     select: false // Don't return password by default
   },
+  // Optional profile fields
+  dateOfBirth: {
+    type: String,
+    default: ''
+  },
+  occupation: {
+    type: String,
+    default: ''
+  },
+  gender: {
+    type: String,
+    enum: ['male', 'female', ''],
+    default: ''
+  },
   resetPasswordToken: {
     type: String,
     select: false

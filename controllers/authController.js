@@ -45,6 +45,58 @@ exports.signup = async (req, res) => {
   }
 };
 
+// Get current user's profile
+exports.getProfile = async (req, res) => {
+  try {
+    const user = req.user; // set by auth middleware
+    if (!user) return res.status(401).json({ message: 'Not authenticated' });
+    return res.status(200).json({ user: {
+      id: user._id,
+      fullname: user.fullname,
+      email: user.email,
+      dateOfBirth: user.dateOfBirth || '',
+      occupation: user.occupation || '',
+      gender: user.gender || ''
+    }});
+  } catch (e) {
+    return res.status(500).json({ message: 'Failed to load profile' });
+  }
+};
+
+// Update current user's profile
+exports.updateProfile = async (req, res) => {
+  try {
+    const user = req.user; // set by auth middleware
+    if (!user) return res.status(401).json({ message: 'Not authenticated' });
+
+    const { fullname, dateOfBirth, occupation, gender } = req.body || {};
+
+    if (typeof fullname === 'string' && fullname.trim().length) {
+      user.fullname = fullname.trim();
+    }
+    if (typeof dateOfBirth === 'string') user.dateOfBirth = dateOfBirth;
+    if (typeof occupation === 'string') user.occupation = occupation;
+    if (typeof gender === 'string') {
+      const g = gender.toLowerCase();
+      if (g === 'male' || g === 'female' || g === '') user.gender = g; else {
+        return res.status(400).json({ message: 'Invalid gender' });
+      }
+    }
+
+    await user.save();
+    return res.status(200).json({ user: {
+      id: user._id,
+      fullname: user.fullname,
+      email: user.email,
+      dateOfBirth: user.dateOfBirth || '',
+      occupation: user.occupation || '',
+      gender: user.gender || ''
+    }});
+  } catch (e) {
+    return res.status(500).json({ message: 'Failed to update profile' });
+  }
+};
+
 exports.login = async (req, res) => {
   const { email, password } = req.body;
   

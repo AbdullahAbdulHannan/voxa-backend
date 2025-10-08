@@ -1,4 +1,5 @@
 const Reminder = require('../models/reminderModel');
+const Notification = require('../models/notificationModel');
 const User = require('../models/userModel');
 const { ensureReminderTTS } = require('../utils/ttsService');
 let gemini;
@@ -149,6 +150,19 @@ exports.scanAndTrigger = async (req, res) => {
           }
         }
       } catch {}
+
+      // Persist a notification entry server-side for in-app feed
+      try {
+        await Notification.create({
+          userId,
+          type: 'location',
+          message: (updated.aiNotificationLine || `You're near a place for ${updated.title}.`),
+          isRead: false,
+          reminderId: updated._id,
+        });
+      } catch (e) {
+        // non-blocking
+      }
 
       out.push({
         reminderId: updated._id,
