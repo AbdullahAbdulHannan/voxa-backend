@@ -54,9 +54,7 @@ exports.getProfile = async (req, res) => {
       id: user._id,
       fullname: user.fullname,
       email: user.email,
-      dateOfBirth: user.dateOfBirth || '',
-      occupation: user.occupation || '',
-      gender: user.gender || ''
+      phone: user.phone || ''
     }});
   } catch (e) {
     return res.status(500).json({ message: 'Failed to load profile' });
@@ -69,28 +67,32 @@ exports.updateProfile = async (req, res) => {
     const user = req.user; // set by auth middleware
     if (!user) return res.status(401).json({ message: 'Not authenticated' });
 
-    const { fullname, dateOfBirth, occupation, gender } = req.body || {};
+    const { fullname, phone, email } = req.body || {};
 
     if (typeof fullname === 'string' && fullname.trim().length) {
       user.fullname = fullname.trim();
     }
-    if (typeof dateOfBirth === 'string') user.dateOfBirth = dateOfBirth;
-    if (typeof occupation === 'string') user.occupation = occupation;
-    if (typeof gender === 'string') {
-      const g = gender.toLowerCase();
-      if (g === 'male' || g === 'female' || g === '') user.gender = g; else {
-        return res.status(400).json({ message: 'Invalid gender' });
+    if (typeof phone === 'string') user.phone = phone;
+    // Optional email update with validation and uniqueness check
+    if (typeof email === 'string' && email.trim().length && email !== user.email) {
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ message: 'Please provide a valid email address' });
       }
+      const exists = await User.findOne({ email: email.toLowerCase() });
+      if (exists && String(exists._id) !== String(user._id)) {
+        return res.status(400).json({ message: 'Email already in use' });
+      }
+      user.email = email.toLowerCase();
     }
+    // gender/dateOfBirth/occupation removed
 
     await user.save();
     return res.status(200).json({ user: {
       id: user._id,
       fullname: user.fullname,
       email: user.email,
-      dateOfBirth: user.dateOfBirth || '',
-      occupation: user.occupation || '',
-      gender: user.gender || ''
+      phone: user.phone || ''
     }});
   } catch (e) {
     return res.status(500).json({ message: 'Failed to update profile' });
