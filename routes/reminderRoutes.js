@@ -99,17 +99,17 @@ router.put(
 );
 
 // Get a single reminder by ID
-// router.get(
-//   '/:id',
-//   auth,
-//   [
-//     param('id')
-//       .isMongoId()
-//       .withMessage('Invalid reminder ID'),
-//     validate
-//   ],
-//   reminderController.getReminder
-// );
+router.get(
+  '/:id',
+  auth,
+  [
+    param('id')
+      .isMongoId()
+      .withMessage('Invalid reminder ID'),
+  ],
+  validate,
+  reminderController.getReminder
+);
 
 // Delete a reminder
 router.delete('/:id', auth, reminderController.deleteReminder);

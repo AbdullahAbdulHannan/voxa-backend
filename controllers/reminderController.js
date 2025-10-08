@@ -172,6 +172,22 @@ exports.getReminders = async (req, res) => {
   }
 };
 
+// Get a single reminder by ID
+exports.getReminder = async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id || req.user;
+    const { id } = req.params;
+    const reminder = await Reminder.findOne({ _id: id, user: userId });
+    if (!reminder) {
+      return res.status(404).json({ success: false, message: 'Reminder not found' });
+    }
+    return res.json({ success: true, data: reminder });
+  } catch (error) {
+    console.error('getReminder error', error);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to fetch reminder' });
+  }
+};
+
 // Update a reminder
 exports.updateReminder = async (req, res) => {
   try {
