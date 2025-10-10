@@ -26,12 +26,27 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Legacy reset token fields (kept for backward compatibility)
   resetPasswordToken: {
     type: String,
     select: false
   },
   resetPasswordExpires: {
     type: Date,
+    select: false
+  },
+  // OTP-based reset fields
+  resetOtpHash: {
+    type: String,
+    select: false
+  },
+  resetOtpExpiry: {
+    type: Date,
+    select: false
+  },
+  resetOtpVerified: {
+    type: Boolean,
+    default: false,
     select: false
   },
   reminders: [{
@@ -60,6 +75,10 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
     select: false
+  },
+  passwordChangedAt: {
+    type: Date,
+    select: false
   }
 }, { 
   timestamps: true,
@@ -70,6 +89,8 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   this.password = await bcrypt.hash(this.password, 12);
+  // Ensure tokens issued before this time are invalidated
+  this.passwordChangedAt = new Date(Date.now() - 1000);
   next();
 });
 
