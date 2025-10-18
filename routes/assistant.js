@@ -557,27 +557,30 @@ async function createTask(taskData, userId) {
 
 // Helper function to create a meeting in the database
 async function createMeeting(meetingData, userId) {
-  // Calculate end time based on duration (default 30 minutes)
-  const duration = meetingData.duration || 30;
-  const startTime = meetingData.startTime ? new Date(meetingData.startTime) : new Date();
-  const endTime = new Date(startTime.getTime() + duration * 60000);
-  
-  const meeting = new Reminder({
-    type: 'Meeting',
-    title: meetingData.title,
-    description: meetingData.description || '',
-    user: userId,
-    startTime: startTime,
-    endTime: endTime,
-    isManualSchedule: false,
-    aiNotificationLine: null,
-    scheduleType: 'one-day',
-    scheduleTime: { minutesBeforeStart: 15, fixedTime: null },
-    notificationPreferenceMinutes:15
-  });
-  
-  return await meeting.save();
+  try {
+    const duration = meetingData.duration || 30;
+    const startDate = meetingData.startTime ? new Date(meetingData.startTime) : new Date();
+    const endDate = new Date(startDate.getTime() + duration * 60000);
+
+    const meeting = new Reminder({
+      type: 'Meeting',
+      user: userId,
+      title: meetingData.title,
+      description: meetingData.description || '',
+      startDate,  // ✅ fixed
+      endDate,    // ✅ fixed
+      aiSuggested: true
+    });
+
+    const saved = await meeting.save();
+    console.log('✅ Meeting Saved:', saved);
+    return saved;
+  } catch (err) {
+    console.error('❌ Meeting Save Error:', err);
+    throw err;
+  }
 }
+
 
 // Helper function to generate message for missing fields
 function getMissingFieldsMessage(missingFields, extractedFields = {}) {
