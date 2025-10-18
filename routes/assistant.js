@@ -539,16 +539,17 @@ async function prepareActionConfirmation(type, data, userId) {
 // Helper function to create a task in the database
 async function createTask(taskData, userId) {
   const task = new Reminder({
+    user: userId,
     type: 'Task',
     title: taskData.title,
     description: taskData.description || '',
-    user: userId,
-    dueDate: taskData.startDateISO ? new Date(taskData.startDateISO) : null,
+    startDate: taskData.startDateISO ? new Date(taskData.startDateISO) : null,
     isCompleted: false,
-    priority: taskData.priority || 'medium',
+    isManualSchedule: false,
+    aiNotificationLine: null,
     scheduleType: taskData.scheduleType || 'one-day',
     scheduleTime: taskData.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
-    isRoutine: taskData.isRoutine || false
+    notificationPreferenceMinutes:15
   });
   
   return await task.save();
@@ -568,10 +569,11 @@ async function createMeeting(meetingData, userId) {
     user: userId,
     startTime: startTime,
     endTime: endTime,
-    isRecurring: meetingData.isRecurring || false,
-    recurrencePattern: meetingData.recurrencePattern || null,
-    location: meetingData.location || '',
-    attendees: meetingData.attendees || []
+    isManualSchedule: false,
+    aiNotificationLine: null,
+    scheduleType: 'one-day',
+    scheduleTime: { minutesBeforeStart: 15, fixedTime: null },
+    notificationPreferenceMinutes:15
   });
   
   return await meeting.save();
