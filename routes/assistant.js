@@ -3,9 +3,8 @@ const router = express.Router();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { auth } = require('../middleware/authMiddleware');
 const Conversation = require('../models/Conversation');
-const Task = require('../models/Task');
-const Meeting = require('../models/Meeting');
-const { v4: uuidv4 } = require('uuid');
+const Reminder = require('../models/reminderModel');
+
 const { suggestFullScheduleWithGemini } = require('../services/geminiService');
 
 // Initialize Google's Generative AI
@@ -522,7 +521,8 @@ async function prepareActionConfirmation(type, data, userId) {
 
 // Helper function to create a task in the database
 async function createTask(taskData, userId) {
-  const task = new Task({
+  const task = new Reminder({
+    type: 'Task',
     title: taskData.title,
     description: taskData.description || '',
     user: userId,
@@ -544,7 +544,8 @@ async function createMeeting(meetingData, userId) {
   const startTime = meetingData.startTime ? new Date(meetingData.startTime) : new Date();
   const endTime = new Date(startTime.getTime() + duration * 60000);
   
-  const meeting = new Meeting({
+  const meeting = new Reminder({
+    type: 'Meeting',
     title: meetingData.title,
     description: meetingData.description || '',
     user: userId,

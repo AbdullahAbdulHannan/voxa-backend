@@ -9,7 +9,6 @@ const locationRoutes = require('./routes/locationRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const { errorHandler } = require('./middleware/errorMiddleware');
 const assistantRoutes = require('./routes/assistant');
-const speechRoutes = require('./routes/speech');
 const app = express();
 
 // Middleware
@@ -35,7 +34,6 @@ app.use('/api/reminders', reminderRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/speech', speechRoutes);
 // Error handling middleware
 app.use(errorHandler);
 
