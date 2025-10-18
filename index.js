@@ -8,7 +8,7 @@ const calendarRoutes = require('./routes/calendarRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const { errorHandler } = require('./middleware/errorMiddleware');
-const assistantRoutes = require('./routes/assistantRoutes');
+const assistantRoutes = require('./routes/assistant');
 const app = express();
 
 // Middleware
