@@ -24,9 +24,13 @@ When creating tasks or meetings, you should:
 
 // Chat with the AI assistant
 router.post('/chat', auth, async (req, res) => {
+  console.log('\n--- New Chat Request ---');
+  console.log('Headers:', req.headers);
+  console.log('Body:', req.body);
+  console.log('User:', req.user);
   try {
     const { message } = req.body;
-    const userId = req.user.id;
+    const userId = req.user?.id || req.user?._id;
 
     // Get or create conversation
     let conversation = await Conversation.findOne({ userId });
@@ -112,10 +116,17 @@ router.post('/chat', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error in chat endpoint:', error);
-    res.status(500).json({
+     console.error('\n--- Error in /chat endpoint ---');
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      code: error.code
+    });
+   res.status(500).json({
       success: false,
       message: 'Error processing your request',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
