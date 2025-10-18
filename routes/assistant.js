@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const auth = require('../middleware/auth');
+const auth = require('../middleware/authMiddleware');
 const Conversation = require('../models/Conversation');
 const { v4: uuidv4 } = require('uuid');
 
