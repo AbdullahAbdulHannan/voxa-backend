@@ -51,9 +51,10 @@ router.post('/chat', auth, async (req, res) => {
         return res.json(result);
       }
     }
-
+const lastAssistantResponse =
+  conversation.messages[conversation.messages.length - 1]?.content || '';
     // Detect action from the message
-    const action = await detectAction(conversation.messages, message, userId);
+    const action = await detectAction(lastAssistantResponse, message, userId);
     
     if (action) {
       // If we need more info, ask for it
@@ -166,8 +167,13 @@ router.delete('/conversation', auth, async (req, res) => {
 
 // Helper function to detect actions in the conversation
 async function detectAction(assistantResponse, userMessage, userId) {
-  const lowerResponse = assistantResponse.toLowerCase();
-  const lowerMessage = userMessage.toLowerCase();
+  const lastAssistantMessage = Array.isArray(assistantResponse) 
+    ? assistantResponse[assistantResponse.length - 1]?.content || ''
+    : String(assistantResponse || '');
+  
+  const lowerResponse = lastAssistantMessage.toLowerCase();
+  const lowerMessage = String(userMessage || '').toLowerCase();
+  
   
   // Extract task/meeting details using more comprehensive patterns
   const extractDetails = (message) => {
