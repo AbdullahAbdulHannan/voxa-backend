@@ -213,7 +213,7 @@ exports.forgotPassword = async (req, res) => {
     await user.save();
 
     // Send OTP via email
-    const html = `<p>Your Voxa password reset OTP is: <b>${otp}</b></p><p>This code will expire in 5 minutes.</p>`;
+    const html = `<p>Your Beela password reset OTP is: <b>${otp}</b></p><p>This code will expire in 5 minutes.</p>`;
     try { await sendEmail(email, 'Your OTP Code', html); } catch (e) { /* avoid leaking email existence */ }
 
     return res.status(200).json({ status: 'success', message: 'OTP sent if email exists.' });
