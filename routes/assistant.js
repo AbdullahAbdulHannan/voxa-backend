@@ -43,7 +43,7 @@ router.post('/chat', auth, async (req, res) => {
     }
 
     // Get model and start chat
-    const model = genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     const chat = model.startChat({
       history: conversation.messages.map(msg => ({
         role: msg.role === 'assistant' ? 'model' : 'user',
