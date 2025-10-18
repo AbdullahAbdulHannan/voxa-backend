@@ -9,6 +9,7 @@ const locationRoutes = require('./routes/locationRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const { errorHandler } = require('./middleware/errorMiddleware');
 const assistantRoutes = require('./routes/assistant');
+const speechRoutes = require('./routes/speech');
 const app = express();
 
 // Middleware
@@ -29,11 +30,12 @@ mongoose.connect(process.env.MONGO_URI)
 
 // Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/reminders', reminderRoutes);
-app.use('/api', calendarRoutes);
-app.use('/api/location', locationRoutes);
-app.use('/api/notifications', notificationRoutes);
 app.use('/api/assistant', assistantRoutes);
+app.use('/api/reminders', reminderRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/locations', locationRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/speech', speechRoutes);
 // Error handling middleware
 app.use(errorHandler);
 
