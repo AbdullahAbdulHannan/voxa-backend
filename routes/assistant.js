@@ -6,7 +6,7 @@ const Conversation = require('../models/Conversation');
 const { v4: uuidv4 } = require('uuid');
 
 // Initialize Google's Generative AI
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 
 // System prompt for the AI assistant
 const SYSTEM_PROMPT = `You are Bela, a helpful AI assistant for the VoxaAI productivity app. 
