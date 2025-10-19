@@ -4,6 +4,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { auth } = require('../middleware/authMiddleware');
 const Conversation = require('../models/Conversation');
 const Reminder = require('../models/reminderModel');
+const User = require('../models/userModel');
 
 const { suggestFullScheduleWithGemini } = require('../services/geminiService');
 
@@ -45,9 +46,10 @@ router.post('/chat', auth, async (req, res) => {
     conversation.messages.push({ role: 'user', content: message });
     
     // Check for pending action first
-    if (conversation.pendingAction) {
-      console.log('🔔 Pending action exists, handling user response:', message);
-      const result = await handlePendingAction(conversation, message, userId);
+    if (conversation.pendingAction && conversation.pendingAction.type) {
+      console.log('🔔 Pending action exists:', JSON.stringify(conversation.pendingAction, null, 2));
+      console.log('🔔 Handling user response:', message);
+      const result = await handlePendingAction(conversation, message, userId, req.user);
       if (result) {
         // Save assistant's response to conversation
         conversation.messages.push({ role: 'assistant', content: result.response });
@@ -333,9 +335,16 @@ async function detectAction(assistantResponse, userMessage, userId) {
 }
 
 // Helper function to handle pending actions (confirmations, missing info)
-async function handlePendingAction(conversation, message, userId) {
+async function handlePendingAction(conversation, message, userId, userObj) {
   const pendingAction = conversation.pendingAction;
   const lowerMessage = message.toLowerCase();
+  
+  console.log('📋 handlePendingAction called with:', {
+    pendingActionType: pendingAction?.type,
+    confirmationNeeded: pendingAction?.confirmationNeeded,
+    message: message,
+    userId: userId
+  });
   
   // Check if this is a confirmation
   if (pendingAction.confirmationNeeded) {
@@ -605,33 +614,39 @@ async function prepareActionConfirmation(type, data, userId) {
 
 // Helper function to create a task in the database
 async function createTask(taskData, userId) {
-  console.log('📝 Creating task with data:', { taskData, userId });
+  console.log('📝 Creating task with data:', JSON.stringify({ taskData, userId }, null, 2));
   
-  const task = new Reminder({
+  // Prepare reminder data matching the reminderModel schema
+  const reminderData = {
     user: userId,
     type: 'Task',
     title: taskData.title,
     description: taskData.description || '',
     startDate: taskData.startDateISO ? new Date(taskData.startDateISO) : null,
     isCompleted: false,
-    isManualSchedule: taskData.scheduleType === 'routine' ? true : false,
-    aiNotificationLine: null,
+    isManualSchedule: taskData.scheduleType === 'routine' ? true : (taskData.startDateISO ? true : false),
     aiSuggested: true,
     scheduleType: taskData.scheduleType || 'one-day',
     scheduleTime: taskData.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
     scheduleDays: taskData.scheduleDays || [],
-    notificationPreferenceMinutes: taskData.scheduleTime?.minutesBeforeStart || 15
-  });
+    notificationPreferenceMinutes: taskData.scheduleTime?.minutesBeforeStart || 15,
+    icon: 'task'
+  };
+  
+  console.log('💾 Prepared reminder data:', JSON.stringify(reminderData, null, 2));
   
   try {
+    const task = new Reminder(reminderData);
     const savedTask = await task.save();
-    console.log('✅ Task saved to database:', savedTask);
+    console.log('✅ Task saved to database with ID:', savedTask._id);
+    console.log('✅ Full saved task:', JSON.stringify(savedTask.toObject(), null, 2));
     return savedTask;
   } catch (error) {
     console.error('❌ Error saving task to database:', {
       error: error.message,
       stack: error.stack,
-      taskData: task
+      validationErrors: error.errors,
+      reminderData: reminderData
     });
     throw error;
   }
@@ -639,32 +654,42 @@ async function createTask(taskData, userId) {
 
 // Helper function to create a meeting in the database
 async function createMeeting(meetingData, userId) {
-  console.log('📅 Creating meeting with data:', { meetingData, userId });
+  console.log('📅 Creating meeting with data:', JSON.stringify({ meetingData, userId }, null, 2));
   
   try {
     const duration = meetingData.duration || 30;
     const startDate = meetingData.startTime ? new Date(meetingData.startTime) : new Date();
     const endDate = new Date(startDate.getTime() + duration * 60000);
 
-    const meeting = new Reminder({
+    const reminderData = {
       type: 'Meeting',
       user: userId,
       title: meetingData.title,
       description: meetingData.description || '',
-      startDate,  // ✅ fixed
-      endDate,    // ✅ fixed
+      startDate,
+      endDate,
       isManualSchedule: true,
       scheduleType: 'one-day',
       scheduleTime: { minutesBeforeStart: 10 },
       notificationPreferenceMinutes: 10,
-      aiSuggested: true
-    });
+      aiSuggested: true,
+      icon: 'meeting'
+    };
 
+    console.log('💾 Prepared meeting reminder data:', JSON.stringify(reminderData, null, 2));
+
+    const meeting = new Reminder(reminderData);
     const saved = await meeting.save();
-    console.log('✅ Meeting Saved:', saved);
+    console.log('✅ Meeting saved to database with ID:', saved._id);
+    console.log('✅ Full saved meeting:', JSON.stringify(saved.toObject(), null, 2));
     return saved;
   } catch (err) {
-    console.error('❌ Meeting Save Error:', err);
+    console.error('❌ Meeting Save Error:', {
+      error: err.message,
+      stack: err.stack,
+      validationErrors: err.errors,
+      meetingData: meetingData
+    });
     throw err;
   }
 }

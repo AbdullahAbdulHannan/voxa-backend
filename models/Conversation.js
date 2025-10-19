@@ -24,6 +24,15 @@ const conversationSchema = new mongoose.Schema({
     index: true
   },
   messages: [messageSchema],
+  pendingAction: {
+    type: {
+      type: String,
+      enum: ['create_task', 'schedule_meeting']
+    },
+    data: mongoose.Schema.Types.Mixed,
+    confirmationNeeded: Boolean,
+    missingFields: [String]
+  },
   createdAt: {
     type: Date,
     default: Date.now
