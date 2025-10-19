@@ -57,6 +57,8 @@ const lastAssistantResponse =
     const action = await detectAction(lastAssistantResponse, message, userId);
     
     if (action) {
+      console.log('🔍 Action detected:', { type: action.type, confirmationNeeded: action.confirmationNeeded });
+      
       // If we need more info, ask for it
       if (action.needsMoreInfo) {
         conversation.pendingAction = {
@@ -79,9 +81,11 @@ const lastAssistantResponse =
         conversation.pendingAction = {
           type: action.type,
           data: action.data,
-          confirmed: false
+          confirmationNeeded: true
         };
         await conversation.save();
+        
+        console.log('💾 Pending action saved to conversation:', conversation.pendingAction);
         
         return res.json({
           success: true,
@@ -217,29 +221,43 @@ async function detectAction(assistantResponse, userMessage, userId) {
         }
       });
 
+      const taskData = {
+        title: details.title || 'New Task',
+        description: userMessage,
+        scheduleType: schedule.scheduleType || (isRoutine ? 'routine' : 'one-day'),
+        startDateISO: schedule.startDateISO,
+        scheduleDays: schedule.scheduleDays || [],
+        scheduleTime: schedule.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
+        isRoutine
+      };
+
+      // Prepare confirmation message
+      const confirmation = await prepareActionConfirmation('create_task', taskData, userId);
+
       return {
         type: 'create_task',
-        data: {
-          title: details.title || 'New Task',
-          description: userMessage,
-          scheduleType: isRoutine ? 'routine' : 'one-day',
-          startDateISO: schedule.startDateISO,
-          scheduleDays: schedule.scheduleDays || [],
-          scheduleTime: schedule.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
-          isRoutine
-        }
+        data: confirmation.data,
+        confirmationNeeded: true,
+        confirmationMessage: confirmation.confirmationMessage
       };
     } catch (error) {
       console.error('Error suggesting schedule:', error);
       // Fallback to basic task creation if Gemini fails
+      const taskData = {
+        title: details.title || 'New Task',
+        description: userMessage,
+        scheduleType: isRoutine ? 'routine' : 'one-day',
+        scheduleTime: { minutesBeforeStart: 15, fixedTime: null },
+        isRoutine
+      };
+
+      const confirmation = await prepareActionConfirmation('create_task', taskData, userId);
+
       return {
         type: 'create_task',
-        data: {
-          title: details.title || 'New Task',
-          description: userMessage,
-          scheduleType: isRoutine ? 'routine' : 'one-day',
-          isRoutine
-        }
+        data: confirmation.data,
+        confirmationNeeded: true,
+        confirmationMessage: confirmation.confirmationMessage
       };
     }
   }
@@ -264,29 +282,44 @@ async function detectAction(assistantResponse, userMessage, userId) {
         }
       });
 
+      const meetingData = {
+        title: details.title || 'New Meeting',
+        description: userMessage,
+        startTime: schedule.startDateISO || new Date().toISOString(),
+        endTime: new Date(new Date(schedule.startDateISO || new Date()).getTime() + (details.duration || 30) * 60000).toISOString(),
+        duration: details.duration || 30,
+        isRecurring,
+        recurrencePattern: isRecurring ? 'FREQ=WEEKLY;BYDAY=' + (schedule.scheduleDays?.join(',') || 'MO,WE,FR') : null
+      };
+
+      // Prepare confirmation message
+      const confirmation = await prepareActionConfirmation('schedule_meeting', meetingData, userId);
+
       return {
         type: 'schedule_meeting',
-        data: {
-          title: details.title || 'New Meeting',
-          description: userMessage,
-          startTime: schedule.startDateISO || new Date().toISOString(),
-          endTime: new Date(new Date(schedule.startDateISO || new Date()).getTime() + (details.duration || 30) * 60000).toISOString(),
-          isRecurring,
-          recurrencePattern: isRecurring ? 'FREQ=WEEKLY;BYDAY=' + (schedule.scheduleDays?.join(',') || 'MO,WE,FR') : null
-        }
+        data: confirmation.data,
+        confirmationNeeded: true,
+        confirmationMessage: confirmation.confirmationMessage
       };
     } catch (error) {
       console.error('Error suggesting meeting schedule:', error);
       // Fallback to basic meeting creation if Gemini fails
+      const meetingData = {
+        title: details.title || 'New Meeting',
+        description: userMessage,
+        startTime: new Date().toISOString(),
+        endTime: new Date(Date.now() + (details.duration || 30) * 60000).toISOString(),
+        duration: details.duration || 30,
+        isRecurring
+      };
+
+      const confirmation = await prepareActionConfirmation('schedule_meeting', meetingData, userId);
+
       return {
         type: 'schedule_meeting',
-        data: {
-          title: details.title || 'New Meeting',
-          description: userMessage,
-          startTime: new Date().toISOString(),
-          endTime: new Date(Date.now() + (details.duration || 30) * 60000).toISOString(),
-          isRecurring
-        }
+        data: confirmation.data,
+        confirmationNeeded: true,
+        confirmationMessage: confirmation.confirmationMessage
       };
     }
   }
@@ -558,6 +591,8 @@ async function prepareActionConfirmation(type, data, userId) {
 
 // Helper function to create a task in the database
 async function createTask(taskData, userId) {
+  console.log('📝 Creating task with data:', { taskData, userId });
+  
   const task = new Reminder({
     user: userId,
     type: 'Task',
@@ -565,28 +600,33 @@ async function createTask(taskData, userId) {
     description: taskData.description || '',
     startDate: taskData.startDateISO ? new Date(taskData.startDateISO) : null,
     isCompleted: false,
-    isManualSchedule: false,
+    isManualSchedule: taskData.scheduleType === 'routine' ? true : false,
     aiNotificationLine: null,
+    aiSuggested: true,
     scheduleType: taskData.scheduleType || 'one-day',
     scheduleTime: taskData.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
-    notificationPreferenceMinutes:15
+    scheduleDays: taskData.scheduleDays || [],
+    notificationPreferenceMinutes: taskData.scheduleTime?.minutesBeforeStart || 15
   });
+  
   try {
-  const savedTask = await task.save();
-  console.log('✅ Task saved to database:', savedTask);
-  return savedTask;
-} catch (error) {
-  console.error('❌ Error saving task to database:', {
-    error: error.message,
-    stack: error.stack,
-    taskData: task
-  });
-  throw error;
-}
+    const savedTask = await task.save();
+    console.log('✅ Task saved to database:', savedTask);
+    return savedTask;
+  } catch (error) {
+    console.error('❌ Error saving task to database:', {
+      error: error.message,
+      stack: error.stack,
+      taskData: task
+    });
+    throw error;
+  }
 }
 
 // Helper function to create a meeting in the database
 async function createMeeting(meetingData, userId) {
+  console.log('📅 Creating meeting with data:', { meetingData, userId });
+  
   try {
     const duration = meetingData.duration || 30;
     const startDate = meetingData.startTime ? new Date(meetingData.startTime) : new Date();
@@ -599,6 +639,10 @@ async function createMeeting(meetingData, userId) {
       description: meetingData.description || '',
       startDate,  // ✅ fixed
       endDate,    // ✅ fixed
+      isManualSchedule: true,
+      scheduleType: 'one-day',
+      scheduleTime: { minutesBeforeStart: 10 },
+      notificationPreferenceMinutes: 10,
       aiSuggested: true
     });
 
