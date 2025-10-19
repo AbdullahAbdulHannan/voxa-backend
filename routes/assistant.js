@@ -307,14 +307,34 @@ async function handlePendingAction(conversation, message, userId) {
         let createdItem;
         let responseMessage;
         
-        if (pendingAction.type === 'create_task') {
-          createdItem = await createTask(pendingAction.data, userId);
-          responseMessage = `✅ Task "${createdItem.title}" has been created!`;
-        } else if (pendingAction.type === 'schedule_meeting') {
-          createdItem = await createMeeting(pendingAction.data, userId);
-          responseMessage = `✅ Meeting "${createdItem.title}" has been scheduled!`;
-        }
-        
+       // In handlePendingAction function, find the task/meeting creation section and update it:
+if (pendingAction.type === 'create_task') {
+  console.log('🔄 Attempting to create task with data:', { 
+    data: pendingAction.data,
+    userId 
+  });
+  try {
+    createdItem = await createTask(pendingAction.data, userId);
+    console.log('✅ Task created successfully:', createdItem);
+    responseMessage = `✅ Task "${createdItem.title}" has been created!`;
+  } catch (error) {
+    console.error('❌ Error creating task:', error);
+    throw error;
+  }
+} else if (pendingAction.type === 'schedule_meeting') {
+  console.log('🔄 Attempting to create meeting with data:', { 
+    data: pendingAction.data,
+    userId 
+  });
+  try {
+    createdItem = await createMeeting(pendingAction.data, userId);
+    console.log('✅ Meeting created successfully:', createdItem);
+    responseMessage = `✅ Meeting "${createdItem.title}" has been scheduled!`;
+  } catch (error) {
+    console.error('❌ Error creating meeting:', error);
+    throw error;
+  }
+}
         // Clear pending action
         conversation.pendingAction = null;
         await conversation.save();
@@ -551,8 +571,18 @@ async function createTask(taskData, userId) {
     scheduleTime: taskData.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
     notificationPreferenceMinutes:15
   });
-  
-  return await task.save();
+  try {
+  const savedTask = await task.save();
+  console.log('✅ Task saved to database:', savedTask);
+  return savedTask;
+} catch (error) {
+  console.error('❌ Error saving task to database:', {
+    error: error.message,
+    stack: error.stack,
+    taskData: task
+  });
+  throw error;
+}
 }
 
 // Helper function to create a meeting in the database
