@@ -46,8 +46,13 @@ router.post('/chat', auth, async (req, res) => {
     
     // Check for pending action first
     if (conversation.pendingAction) {
+      console.log('🔔 Pending action exists, handling user response:', message);
       const result = await handlePendingAction(conversation, message, userId);
       if (result) {
+        // Save assistant's response to conversation
+        conversation.messages.push({ role: 'assistant', content: result.response });
+        await conversation.save();
+        console.log('✅ Response sent and conversation saved');
         return res.json(result);
       }
     }
@@ -334,40 +339,35 @@ async function handlePendingAction(conversation, message, userId) {
   
   // Check if this is a confirmation
   if (pendingAction.confirmationNeeded) {
+    console.log('🤔 Checking user confirmation. Message:', lowerMessage);
+    
     if (isAffirmative(lowerMessage)) {
+      console.log('✅ User confirmed! Creating item...');
       // User confirmed, create the item
       try {
         let createdItem;
         let responseMessage;
         
-       // In handlePendingAction function, find the task/meeting creation section and update it:
-if (pendingAction.type === 'create_task') {
-  console.log('🔄 Attempting to create task with data:', { 
-    data: pendingAction.data,
-    userId 
-  });
-  try {
-    createdItem = await createTask(pendingAction.data, userId);
-    console.log('✅ Task created successfully:', createdItem);
-    responseMessage = `✅ Task "${createdItem.title}" has been created!`;
-  } catch (error) {
-    console.error('❌ Error creating task:', error);
-    throw error;
-  }
-} else if (pendingAction.type === 'schedule_meeting') {
-  console.log('🔄 Attempting to create meeting with data:', { 
-    data: pendingAction.data,
-    userId 
-  });
-  try {
-    createdItem = await createMeeting(pendingAction.data, userId);
-    console.log('✅ Meeting created successfully:', createdItem);
-    responseMessage = `✅ Meeting "${createdItem.title}" has been scheduled!`;
-  } catch (error) {
-    console.error('❌ Error creating meeting:', error);
-    throw error;
-  }
-}
+        // Create task or meeting based on type
+        if (pendingAction.type === 'create_task') {
+          console.log('🔄 Attempting to create task with data:', { 
+            data: pendingAction.data,
+            userId 
+          });
+          createdItem = await createTask(pendingAction.data, userId);
+          console.log('✅ Task created successfully:', createdItem);
+          responseMessage = `✅ Task "${createdItem.title}" has been created successfully!`;
+          
+        } else if (pendingAction.type === 'schedule_meeting') {
+          console.log('🔄 Attempting to create meeting with data:', { 
+            data: pendingAction.data,
+            userId 
+          });
+          createdItem = await createMeeting(pendingAction.data, userId);
+          console.log('✅ Meeting created successfully:', createdItem);
+          responseMessage = `✅ Meeting "${createdItem.title}" has been scheduled successfully!`;
+        }
+        
         // Clear pending action
         conversation.pendingAction = null;
         await conversation.save();
@@ -388,6 +388,7 @@ if (pendingAction.type === 'create_task') {
         };
       }
     } else if (isNegative(lowerMessage)) {
+      console.log('❌ User declined the action');
       // User declined
       conversation.pendingAction = null;
       await conversation.save();
@@ -395,6 +396,15 @@ if (pendingAction.type === 'create_task') {
         success: true,
         response: "Okay, I won't create that. Is there anything else I can help with?",
         action: 'action_cancelled'
+      };
+    } else {
+      // User said something else, re-prompt for confirmation
+      console.log('⚠️ User response unclear, re-prompting for confirmation');
+      return {
+        success: true,
+        response: "I didn't quite catch that. Would you like me to create this? Please say 'yes' to confirm or 'no' to cancel.",
+        action: 'awaiting_confirmation',
+        data: pendingAction.data
       };
     }
   }
@@ -464,12 +474,16 @@ if (pendingAction.type === 'create_task') {
 
 // Helper function to check if user response is affirmative
 function isAffirmative(message) {
-  return /^(yes|yeah|yep|sure|ok|okay|confirm|yup|y|go ahead|do it|create|schedule)$/i.test(message);
+  const trimmed = message.trim().toLowerCase();
+  // Check for common affirmative responses (with word boundaries to allow phrases)
+  return /\b(yes|yeah|yep|sure|ok|okay|confirm|yup|correct|right|go ahead|do it|create|schedule|proceed)\b/i.test(trimmed);
 }
 
 // Helper function to check if user response is negative
 function isNegative(message) {
-  return /^(no|nope|nah|cancel|stop|don't|do not|never mind|forget it)$/i.test(message);
+  const trimmed = message.trim().toLowerCase();
+  // Check for common negative responses
+  return /\b(no|nope|nah|cancel|stop|don't|do not|never mind|forget it|abort)\b/i.test(trimmed);
 }
 
 // Helper function to extract field values from user message
