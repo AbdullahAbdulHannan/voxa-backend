@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const calendarController = require('../controllers/calendarController');
 const { auth } = require('../middleware/authMiddleware');
 const { rateLimit } = require('../middleware/rateLimiter');
 
@@ -22,6 +23,10 @@ router.put('/change-password', auth, rateLimit({ windowMs: 60 * 1000, max: 5, ke
 
 // Google auth route
 router.post('/google', authController.googleAuth);
+
+// Google Calendar OAuth callback (for backward compatibility and proper redirect)
+router.get('/google/callback', calendarController.handleCallback);
+router.get('/calendar/callback', calendarController.handleCallback);
 
 // Profile routes
 router.get('/profile', auth, authController.getProfile);
