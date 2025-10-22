@@ -143,7 +143,7 @@ const syncCalendar = catchAsync(async (req, res, next) => {
 const getCalendarItems = catchAsync(async (req, res) => {
   const { user } = req;
   const calendar = await Calendar.findOne({ user: user._id }).select('events lastSynced accessToken refreshToken tokenExpiry');
-  const reminders = await Reminder.find({ user: user._id }).select('type title description icon startDate endDate location isCompleted aiSuggested isManualSchedule scheduleType scheduleTime scheduleDays');
+  const reminders = await Reminder.find({ user: user._id }).select('type title description icon startDate endDate location isCompleted aiSuggested isManualSchedule scheduleType scheduleTime scheduleDays createdAt');
 
   const tasks = reminders.filter(r => r.type === 'Task').map(r => ({
     id: r._id,
@@ -159,7 +159,8 @@ const getCalendarItems = catchAsync(async (req, res) => {
     isManualSchedule: r.isManualSchedule,
     scheduleType: r.scheduleType,
     scheduleTime: r.scheduleTime,
-    scheduleDays: r.scheduleDays
+    scheduleDays: r.scheduleDays,
+    createdAt: r.createdAt
   }));
 
   const meetings = reminders.filter(r => r.type === 'Meeting').map(r => ({
@@ -170,7 +171,8 @@ const getCalendarItems = catchAsync(async (req, res) => {
     startTime: r.startDate,
     endTime: r.endDate,
     location: r.location?.name || '',
-    aiSuggested: r.aiSuggested
+    aiSuggested: r.aiSuggested,
+    createdAt: r.createdAt
   }));
 
   res.status(200).json({
