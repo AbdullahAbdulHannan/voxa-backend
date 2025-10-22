@@ -12,7 +12,7 @@ const { suggestFullScheduleWithGemini } = require('../services/geminiService');
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 
 // System prompt for the AI assistant
-const SYSTEM_PROMPT = `You are Bela, a helpful AI assistant for the VoxaAI productivity app. 
+const SYSTEM_PROMPT = `You are Bela, a helpful AI assistant for the Beela AI reminder app. 
 Your main functions are:
 1. Answer general questions helpfully and concisely
 2. Help users create tasks and meetings
