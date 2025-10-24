@@ -181,4 +181,41 @@ exports.scanAndTrigger = async (req, res) => {
     console.error('[location] scan error', e);
     res.status(500).json({ success: false, message: e.message || 'Scan failed' });
   }
-}
+};
+
+exports.getDirections = async (req, res) => {
+  try {
+    const { originLat, originLng, destLat, destLng } = req.body;
+    const key = process.env.GOOGLE_MAPS_API_KEY;
+    
+    if (!key) {
+      return res.status(500).json({ success: false, message: 'Google Maps API key not configured' });
+    }
+    
+    const origin = `${originLat},${originLng}`;
+    const destination = `${destLat},${destLng}`;
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mode=driving&key=${encodeURIComponent(key)}`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (data.status !== 'OK') {
+      console.error('[directions] API error:', data.status, data.error_message);
+      return res.status(400).json({ 
+        success: false, 
+        status: data.status, 
+        message: data.error_message || 'Failed to get directions' 
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      status: data.status,
+      routes: data.routes,
+      polyline: data.routes?.[0]?.overview_polyline?.points || null
+    });
+  } catch (e) {
+    console.error('[directions] error', e);
+    res.status(500).json({ success: false, message: e.message || 'Failed to get directions' });
+  }
+};

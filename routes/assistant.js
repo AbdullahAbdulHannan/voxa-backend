@@ -630,7 +630,7 @@ async function createTask(taskData, userId) {
     scheduleTime: taskData.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
     scheduleDays: taskData.scheduleDays || [],
     notificationPreferenceMinutes: taskData.scheduleTime?.minutesBeforeStart || 15,
-    icon: 'task'
+    icon: 'star'
   };
   
   console.log('💾 Prepared reminder data:', JSON.stringify(reminderData, null, 2));
@@ -673,7 +673,7 @@ async function createMeeting(meetingData, userId) {
       scheduleTime: { minutesBeforeStart: 10 },
       notificationPreferenceMinutes: 10,
       aiSuggested: true,
-      icon: 'meeting'
+      icon: 'star'
     };
 
     console.log('💾 Prepared meeting reminder data:', JSON.stringify(reminderData, null, 2));

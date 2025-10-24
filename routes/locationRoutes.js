@@ -28,4 +28,18 @@ router.post(
   locationController.scanAndTrigger
 );
 
+// Get directions between two points (proxy for Google Directions API)
+router.post(
+  '/directions',
+  auth,
+  [
+    body('originLat').isFloat({ min: -90, max: 90 }).withMessage('originLat invalid'),
+    body('originLng').isFloat({ min: -180, max: 180 }).withMessage('originLng invalid'),
+    body('destLat').isFloat({ min: -90, max: 90 }).withMessage('destLat invalid'),
+    body('destLng').isFloat({ min: -180, max: 180 }).withMessage('destLng invalid')
+  ],
+  validate,
+  locationController.getDirections
+);
+
 module.exports = router;
