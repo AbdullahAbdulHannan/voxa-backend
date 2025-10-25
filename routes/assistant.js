@@ -12,7 +12,7 @@ const { suggestFullScheduleWithGemini } = require('../services/geminiService');
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_GEMINI_API_KEY);
 
 // System prompt for the AI assistant
-const SYSTEM_PROMPT = `You are Bela, a helpful AI assistant for the Beela AI reminder app. 
+const SYSTEM_PROMPT = `You are Bela, a helpful AI assistant. 
 Your main functions are:
 1. Answer general questions helpfully and concisely
 2. Help users create tasks and meetings
@@ -65,6 +65,23 @@ const lastAssistantResponse =
     
     if (action) {
       console.log('🔍 Action detected:', { type: action.type, confirmationNeeded: action.confirmationNeeded });
+      
+      // If we need to ask about routine scheduling
+      if (action.needsRoutineConfirmation) {
+        conversation.pendingAction = {
+          type: action.type,
+          data: action.data,
+          needsRoutineConfirmation: true
+        };
+        await conversation.save();
+        
+        return res.json({
+          success: true,
+          response: action.question,
+          action: 'needs_routine_confirmation',
+          data: action.data
+        });
+      }
       
       // If we need more info, ask for it
       if (action.needsMoreInfo) {
@@ -190,16 +207,17 @@ Analyze this user message: "${userMessage}"
 
 Your task:
 1. Detect if the user wants to create a TASK or MEETING, or neither
-2. Extract ALL details from the message (title, date, time, duration, recurrence, description)
+2. INTELLIGENTLY GENERATE a meaningful title and description based on the user's intent (not just extract words)
 3. Calculate the EXACT date and time based on relative terms (tomorrow, next week, etc.)
-4. Identify any missing required information
+4. Extract all scheduling details (duration, recurrence, etc.)
+5. Identify any missing required information
 
 Return a JSON object with this EXACT structure:
 {
   "intent": "task" | "meeting" | "none",
   "data": {
-    "title": "extracted or generated title from user intent",
-    "description": "full user message or extracted description",
+    "title": "GENERATE a clear, concise, professional title that captures the user's intent",
+    "description": "GENERATE a helpful description that explains what this is about based on context",
     "startDateISO": "YYYY-MM-DDTHH:mm:ss.sssZ (exact ISO date-time, required)",
     "duration": number (in minutes, for meetings, default 30),
     "isRoutine": boolean (true if daily/weekly/monthly pattern),
@@ -215,21 +233,44 @@ Return a JSON object with this EXACT structure:
   "confidence": number (0-100, how confident you are about the detection)
 }
 
-CRITICAL RULES:
+CRITICAL RULES FOR TITLE & DESCRIPTION:
+- CREATE intelligent titles, don't just extract words
+- Title should be clear, professional, and action-oriented
+- Description should provide context and details about the task/meeting
+- Examples:
+  * "call John tomorrow" → title: "Call John", description: "Make a phone call to John"
+  * "team standup" → title: "Daily Team Standup", description: "Daily team synchronization meeting"
+  * "buy groceries" → title: "Buy Groceries", description: "Purchase groceries and household items"
+  * "review code" → title: "Code Review", description: "Review and provide feedback on code changes"
+  * "gym workout" → title: "Gym Workout Session", description: "Physical fitness and exercise routine"
+
+DATE & TIME CALCULATION RULES:
 - If user says "tomorrow", calculate from current date (${currentDate.toLocaleDateString()})
-- If user says "tomorrow 5pm" = ${new Date(currentDate.getTime() + 24*60*60*1000).toLocaleDateString()} at 17:00
+- If user says "tomorrow 5pm" = ${new Date(currentDate.getTime() + 24*60*60*1000).toLocaleDateString()} at 17:00:00
 - If user says "next Monday" = calculate the next Monday from today
-- ALWAYS provide a title - create one from the user's intent if not explicitly stated
-- For time: convert "5pm" to "17:00", "9am" to "09:00"
+- For time: convert "5pm" to "17:00", "9am" to "09:00", "3:30pm" to "15:30"
 - If no time specified for task, use scheduleTime.minutesBeforeStart instead of fixedTime
 - If time IS specified, use scheduleTime.fixedTime with HH:mm format
 - Mark field as missing ONLY if it's required and truly cannot be inferred
-- Be smart: "team standup tomorrow" = title: "Team Standup", date: tomorrow at 09:00 (typical standup time)
+
+SMART DEFAULTS:
+- "team standup" without time → 9:00 AM (typical standup time)
+- "lunch meeting" without time → 12:00 PM
+- "workout" without time → ask for time (missing field)
+- No duration specified for meeting → 30 minutes
 
 Examples:
-"Create task for tomorrow 5pm" → startDateISO: "${new Date(new Date(currentDate).setDate(currentDate.getDate() + 1)).toISOString().split('T')[0]}T17:00:00.000Z"
-"Meeting next Monday at 2pm" → calculate next Monday from ${currentDate.toLocaleDateString()}, set time to 14:00
-"Daily standup at 9am" → isRoutine: true, scheduleType: "routine", scheduleDays: ["MO","TU","WE","TH","FR"], fixedTime: "09:00"
+"Create task for tomorrow 5pm" → 
+  title: "Task", description: "Scheduled task", startDateISO: "${new Date(new Date(currentDate).setDate(currentDate.getDate() + 1)).toISOString().split('T')[0]}T17:00:00.000Z"
+
+"Meeting next Monday at 2pm" → 
+  title: "Meeting", description: "Scheduled meeting", calculate next Monday, set time to 14:00
+
+"Daily standup at 9am" → 
+  title: "Daily Team Standup", description: "Daily team synchronization meeting", isRoutine: true, scheduleType: "routine", scheduleDays: ["MO","TU","WE","TH","FR"], fixedTime: "09:00"
+
+"Call client about project tomorrow afternoon" →
+  title: "Call Client About Project", description: "Phone call with client to discuss project details and updates", tomorrow at 14:00 (afternoon default)
 
 Return ONLY valid JSON, no markdown, no explanation.`;
 
@@ -297,6 +338,19 @@ async function detectAction(assistantResponse, userMessage, userId) {
       scheduleTime: geminiAnalysis.data.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
       isRoutine: geminiAnalysis.data.isRoutine || false
     };
+
+    // Check if this task might be a routine activity (playing, studying, workout, etc.)
+    const routineCheck = await checkIfRoutineActivity(taskData.title, taskData.description);
+    
+    if (routineCheck.likelyRoutine && !geminiAnalysis.data.isRoutine) {
+      // Ask user if they want to make this a routine task
+      return {
+        type: 'create_task',
+        data: taskData,
+        needsRoutineConfirmation: true,
+        question: routineCheck.question
+      };
+    }
 
     const confirmation = await prepareActionConfirmation('create_task', taskData, userId);
 
@@ -370,20 +424,177 @@ function generateMissingFieldsQuestion(missingFields, extractedData) {
 // Helper function to handle pending actions (confirmations, missing info)
 async function handlePendingAction(conversation, message, userId, userObj) {
   const pendingAction = conversation.pendingAction;
-  const lowerMessage = message.toLowerCase();
   
   console.log('📋 handlePendingAction called with:', {
     pendingActionType: pendingAction?.type,
     confirmationNeeded: pendingAction?.confirmationNeeded,
+    needsRoutineConfirmation: pendingAction?.needsRoutineConfirmation,
     message: message,
     userId: userId
   });
   
+  // Handle routine confirmation
+  if (pendingAction.needsRoutineConfirmation) {
+    console.log('🔄 Handling routine confirmation...');
+    
+    const userIntent = await analyzeUserResponseWithGemini(message, pendingAction.data, pendingAction.type);
+    
+    if (userIntent.intent === 'confirm') {
+      console.log('✅ User wants routine task! Asking for schedule details...');
+      
+      // User wants to make it a routine, ask for schedule type
+      conversation.pendingAction.needsRoutineConfirmation = false;
+      conversation.pendingAction.needsRoutineSchedule = true;
+      conversation.pendingAction.data.isRoutine = true;
+      await conversation.save();
+      
+      return {
+        success: true,
+        response: "Great! Would you like this as a:\n1. Daily routine (every day)\n2. Specific days of the week\n\nPlease specify which option you'd like.",
+        action: 'needs_routine_schedule',
+        data: pendingAction.data
+      };
+      
+    } else if (userIntent.intent === 'reject') {
+      console.log('❌ User declined routine. Creating one-time task...');
+      
+      // User doesn't want routine, create one-time task
+      pendingAction.data.isRoutine = false;
+      pendingAction.data.scheduleType = 'one-day';
+      
+      const confirmation = await prepareActionConfirmation('create_task', pendingAction.data, userId);
+      
+      conversation.pendingAction = {
+        type: 'create_task',
+        data: pendingAction.data,
+        confirmationNeeded: true
+      };
+      await conversation.save();
+      
+      return {
+        success: true,
+        response: confirmation.confirmationMessage,
+        action: 'confirm_action',
+        data: pendingAction.data
+      };
+    }
+  }
+  
+  // Handle routine schedule details (daily or specific days)
+  if (pendingAction.needsRoutineSchedule) {
+    console.log('📅 Handling routine schedule details...');
+    
+    const scheduleDetails = await analyzeRoutineScheduleWithGemini(message);
+    
+    if (scheduleDetails.scheduleType === 'daily') {
+      console.log('🗓️ Daily routine selected');
+      
+      pendingAction.data.scheduleType = 'routine';
+      pendingAction.data.scheduleDays = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'];
+      pendingAction.data.isRoutine = true;
+      
+      const confirmation = await prepareActionConfirmation('create_task', pendingAction.data, userId);
+      
+      conversation.pendingAction = {
+        type: 'create_task',
+        data: pendingAction.data,
+        confirmationNeeded: true
+      };
+      await conversation.save();
+      
+      return {
+        success: true,
+        response: confirmation.confirmationMessage,
+        action: 'confirm_action',
+        data: pendingAction.data
+      };
+      
+    } else if (scheduleDetails.scheduleType === 'specific-days') {
+      console.log('📆 Specific days selected, asking for days...');
+      
+      if (scheduleDetails.days && scheduleDetails.days.length > 0) {
+        // Days were provided
+        pendingAction.data.scheduleType = 'specific-days';
+        pendingAction.data.scheduleDays = scheduleDetails.days;
+        pendingAction.data.isRoutine = true;
+        
+        const confirmation = await prepareActionConfirmation('create_task', pendingAction.data, userId);
+        
+        conversation.pendingAction = {
+          type: 'create_task',
+          data: pendingAction.data,
+          confirmationNeeded: true
+        };
+        await conversation.save();
+        
+        return {
+          success: true,
+          response: confirmation.confirmationMessage,
+          action: 'confirm_action',
+          data: pendingAction.data
+        };
+      } else {
+        // Ask for specific days
+        conversation.pendingAction.needsRoutineSchedule = false;
+        conversation.pendingAction.needsSpecificDays = true;
+        await conversation.save();
+        
+        return {
+          success: true,
+          response: "Please specify which days of the week:\nYou can say days like 'Monday, Wednesday, Friday' or 'weekdays' or 'weekends'",
+          action: 'needs_specific_days',
+          data: pendingAction.data
+        };
+      }
+    }
+  }
+  
+  // Handle specific days selection
+  if (pendingAction.needsSpecificDays) {
+    console.log('📋 Handling specific days selection...');
+    
+    const daysAnalysis = await extractDaysFromMessageWithGemini(message);
+    
+    if (daysAnalysis.days && daysAnalysis.days.length > 0) {
+      pendingAction.data.scheduleType = 'specific-days';
+      pendingAction.data.scheduleDays = daysAnalysis.days;
+      pendingAction.data.isRoutine = true;
+      
+      const confirmation = await prepareActionConfirmation('create_task', pendingAction.data, userId);
+      
+      conversation.pendingAction = {
+        type: 'create_task',
+        data: pendingAction.data,
+        confirmationNeeded: true
+      };
+      await conversation.save();
+      
+      return {
+        success: true,
+        response: confirmation.confirmationMessage,
+        action: 'confirm_action',
+        data: pendingAction.data
+      };
+    } else {
+      return {
+        success: true,
+        response: "I couldn't understand the days. Please specify like 'Monday and Wednesday' or 'weekdays' or 'Monday, Tuesday, Friday'",
+        action: 'needs_specific_days',
+        data: pendingAction.data
+      };
+    }
+  }
+  
   // Check if this is a confirmation
   if (pendingAction.confirmationNeeded) {
-    console.log('🤔 Checking user confirmation. Message:', lowerMessage);
+    console.log('🤔 Analyzing user response with Gemini...');
     
-    if (isAffirmative(lowerMessage)) {
+    // Use Gemini to understand user's intent (confirm, reject, or modify)
+    const userIntent = await analyzeUserResponseWithGemini(message, pendingAction.data, pendingAction.type);
+    
+    console.log('🤖 Gemini analyzed user intent:', userIntent.intent);
+    
+    if (userIntent.intent === 'confirm') {
       console.log('✅ User confirmed! Creating item...');
       // User confirmed, create the item
       try {
@@ -429,7 +640,7 @@ async function handlePendingAction(conversation, message, userId, userObj) {
           action: 'creation_failed'
         };
       }
-    } else if (isNegative(lowerMessage)) {
+    } else if (userIntent.intent === 'reject') {
       console.log('❌ User declined the action');
       // User declined
       conversation.pendingAction = null;
@@ -439,46 +650,39 @@ async function handlePendingAction(conversation, message, userId, userObj) {
         response: "Okay, I won't create that. Is there anything else I can help with?",
         action: 'action_cancelled'
       };
-    } else {
-      // User wants to make changes - use Gemini to detect what they want to change
-      console.log('🔧 User wants to make changes. Detecting modifications...');
+    } else if (userIntent.intent === 'modify') {
+      // User wants to make changes
+      console.log('🔧 User wants to make changes:', userIntent.modifications);
       
-      const modifications = await detectModificationsWithGemini(
-        message,
-        pendingAction.data,
-        pendingAction.type
+      // Apply modifications from Gemini
+      const updatedData = { ...pendingAction.data, ...userIntent.modifications };
+      
+      // Update pending action with modified data
+      conversation.pendingAction.data = updatedData;
+      await conversation.save();
+      
+      // Re-confirm with updated details
+      const confirmation = await prepareActionConfirmation(
+        pendingAction.type,
+        updatedData,
+        userId
       );
       
-      if (modifications.hasChanges) {
-        console.log('✏️ Changes detected:', JSON.stringify(modifications.updatedData, null, 2));
-        
-        // Update pending action with modified data
-        conversation.pendingAction.data = modifications.updatedData;
-        await conversation.save();
-        
-        // Re-confirm with updated details
-        const confirmation = await prepareActionConfirmation(
-          pendingAction.type,
-          modifications.updatedData,
-          userId
-        );
-        
-        return {
-          success: true,
-          response: `Got it! I've updated the details. ${confirmation.confirmationMessage}`,
-          action: 'confirm_action',
-          data: modifications.updatedData
-        };
-      } else {
-        // Couldn't detect changes, re-prompt for confirmation
-        console.log('⚠️ User response unclear, re-prompting for confirmation');
-        return {
-          success: true,
-          response: "I didn't quite catch that. Would you like me to create this? Please say 'yes' to confirm, 'no' to cancel, or tell me what you'd like to change.",
-          action: 'awaiting_confirmation',
-          data: pendingAction.data
-        };
-      }
+      return {
+        success: true,
+        response: `Got it! I've updated the details.\n\n${confirmation.confirmationMessage}`,
+        action: 'confirm_action',
+        data: updatedData
+      };
+    } else {
+      // Unclear response, re-prompt
+      console.log('⚠️ User response unclear, re-prompting for confirmation');
+      return {
+        success: true,
+        response: "I didn't quite catch that. Would you like me to create this? Please say 'yes' to confirm, 'no' to cancel, or tell me what you'd like to change.",
+        action: 'awaiting_confirmation',
+        data: pendingAction.data
+      };
     }
   }
   
@@ -543,6 +747,272 @@ async function handlePendingAction(conversation, message, userId, userObj) {
   return null;
 }
 
+// Helper function to check if a task is likely a routine activity
+async function checkIfRoutineActivity(title, description) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const prompt = `You are analyzing if a task is likely a routine/recurring activity.
+
+Task title: "${title}"
+Task description: "${description}"
+
+Determine if this task is typically done as a routine (repeatedly on a schedule) rather than a one-time task.
+
+Common routine activities include:
+- Exercise/workout/gym
+- Study sessions
+- Practice (music, sports, etc.)
+- Playing games
+- Meditation/yoga
+- Reading
+- Cleaning/chores
+- Morning/evening routines
+- Meal prep
+- Team standups
+- Regular meetings
+
+Return a JSON object with this EXACT structure:
+{
+  "likelyRoutine": boolean (true if this is typically a routine activity),
+  "confidence": number (0-100),
+  "question": "Would you like to set this as a routine task? This seems like something you might do regularly."
+}
+
+RULES:
+- If confidence > 70 that it's a routine activity, set likelyRoutine to true
+- Make the question friendly and contextual
+- Examples:
+  * "Gym workout" → likelyRoutine: true, question: "Would you like to set this as a routine task? Workouts are often done regularly."
+  * "Study math" → likelyRoutine: true, question: "Would you like to set this as a routine task? Study sessions are often scheduled regularly."
+  * "Buy groceries" → likelyRoutine: true (can be weekly routine)
+  * "Call John" → likelyRoutine: false (typically one-time)
+  * "Submit report" → likelyRoutine: false (one-time task)
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Routine Activity Check:', jsonText);
+    
+    const analysis = JSON.parse(jsonText);
+    return analysis;
+    
+  } catch (error) {
+    console.error('Error checking routine activity:', error);
+    return { likelyRoutine: false, confidence: 0, question: '' };
+  }
+}
+
+// Helper function to analyze routine schedule preference (daily or specific days)
+async function analyzeRoutineScheduleWithGemini(userMessage) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const prompt = `You are analyzing a user's response about routine scheduling preferences.
+
+User's response: "${userMessage}"
+
+Determine if the user wants:
+1. DAILY routine (every day)
+2. SPECIFIC DAYS routine (certain days of the week)
+
+Return a JSON object with this EXACT structure:
+{
+  "scheduleType": "daily" | "specific-days" | "unclear",
+  "days": ["MO", "TU", "WE", "TH", "FR", "SA", "SU"] (only if specific days mentioned),
+  "confidence": number (0-100)
+}
+
+DAY CODES:
+- Sunday: SU (0)
+- Monday: MO (1)
+- Tuesday: TU (2)
+- Wednesday: WE (3)
+- Thursday: TH (4)
+- Friday: FR (5)
+- Saturday: SA (6)
+
+RULES:
+- If user says "daily", "every day", "all days", "1", etc. → scheduleType: "daily"
+- If user says "specific days", "certain days", "2", "weekdays", etc. → scheduleType: "specific-days"
+- If user mentions specific days like "Monday Wednesday Friday" → extract them
+- "weekdays" = ["MO", "TU", "WE", "TH", "FR"]
+- "weekends" = ["SA", "SU"]
+
+Examples:
+"Daily" → {"scheduleType": "daily", "days": [], "confidence": 100}
+"Every day" → {"scheduleType": "daily", "days": [], "confidence": 100}
+"1" → {"scheduleType": "daily", "days": [], "confidence": 100}
+"Specific days" → {"scheduleType": "specific-days", "days": [], "confidence": 90}
+"2" → {"scheduleType": "specific-days", "days": [], "confidence": 90}
+"Monday Wednesday Friday" → {"scheduleType": "specific-days", "days": ["MO", "WE", "FR"], "confidence": 100}
+"Weekdays" → {"scheduleType": "specific-days", "days": ["MO", "TU", "WE", "TH", "FR"], "confidence": 100}
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Routine Schedule Analysis:', jsonText);
+    
+    const analysis = JSON.parse(jsonText);
+    return analysis;
+    
+  } catch (error) {
+    console.error('Error analyzing routine schedule:', error);
+    return { scheduleType: 'unclear', days: [], confidence: 0 };
+  }
+}
+
+// Helper function to extract days from user message
+async function extractDaysFromMessageWithGemini(userMessage) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const prompt = `You are extracting specific days of the week from a user's message.
+
+User's message: "${userMessage}"
+
+Extract which days of the week the user wants.
+
+Return a JSON object with this EXACT structure:
+{
+  "days": ["MO", "TU", "WE", "TH", "FR", "SA", "SU"],
+  "confidence": number (0-100)
+}
+
+DAY CODES:
+- Sunday: SU (0)
+- Monday: MO (1)
+- Tuesday: TU (2)
+- Wednesday: WE (3)
+- Thursday: TH (4)
+- Friday: FR (5)
+- Saturday: SA (6)
+
+RULES:
+- Extract all mentioned days
+- "weekdays" = ["MO", "TU", "WE", "TH", "FR"]
+- "weekends" = ["SA", "SU"]
+- "Monday and Wednesday" = ["MO", "WE"]
+- "MWF" or "Mon Wed Fri" = ["MO", "WE", "FR"]
+- If unclear or no days mentioned, return empty array
+
+Examples:
+"Monday and Wednesday" → {"days": ["MO", "WE"], "confidence": 100}
+"Weekdays" → {"days": ["MO", "TU", "WE", "TH", "FR"], "confidence": 100}
+"Monday, Tuesday, Friday" → {"days": ["MO", "TU", "FR"], "confidence": 100}
+"MWF" → {"days": ["MO", "WE", "FR"], "confidence": 95}
+"Weekends" → {"days": ["SA", "SU"], "confidence": 100}
+"Every Monday" → {"days": ["MO"], "confidence": 100}
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Days Extraction:', jsonText);
+    
+    const analysis = JSON.parse(jsonText);
+    return analysis;
+    
+  } catch (error) {
+    console.error('Error extracting days:', error);
+    return { days: [], confidence: 0 };
+  }
+}
+
+// Helper function to use Gemini to analyze user response (confirm/reject/modify)
+async function analyzeUserResponseWithGemini(userMessage, currentData, actionType) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const currentDate = new Date(); // October 25, 2025
+    
+    const prompt = `You are analyzing a user's response to a confirmation request.
+
+Current date and time: ${currentDate.toISOString()} (${currentDate.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'full', timeStyle: 'short' })})
+
+Action type: ${actionType === 'create_task' ? 'Creating a Task' : 'Scheduling a Meeting'}
+
+Current item details that were presented to user: ${JSON.stringify(currentData, null, 2)}
+
+User's response: "${userMessage}"
+
+Determine if the user wants to:
+1. CONFIRM - proceed with creating the item (yes, sure, ok, go ahead, create it, etc.)
+2. REJECT - cancel the action (no, cancel, don't, never mind, etc.)
+3. MODIFY - make changes to the details (change time, different date, update title, etc.)
+4. UNCLEAR - response is ambiguous or unrelated
+
+If user wants to MODIFY, extract what they want to change and provide the updated values.
+
+Return a JSON object with this EXACT structure:
+{
+  "intent": "confirm" | "reject" | "modify" | "unclear",
+  "modifications": {
+    // Only if intent is "modify", include fields to update
+    "title": "new title if user wants to change it",
+    "startDateISO": "new ISO datetime if user wants to change date/time",
+    "duration": number (new duration in minutes if user wants to change it),
+    "description": "new description if user wants to change it",
+    "scheduleTime": {
+      "fixedTime": "HH:mm if user specifies new time",
+      "minutesBeforeStart": number
+    }
+    // Only include fields that need to be changed
+  },
+  "confidence": number (0-100, how confident you are)
+}
+
+CRITICAL RULES:
+- Be smart about detecting affirmations: "yes", "yeah", "sure", "ok", "proceed", "go ahead", "create it", "confirm", "looks good", "perfect", etc.
+- Be smart about rejections: "no", "cancel", "stop", "don't", "never mind", "forget it", "abort", etc.
+- For modifications: extract the specific changes requested
+- Calculate exact dates for relative terms like "tomorrow", "next week", etc. from ${currentDate.toLocaleDateString()}
+- Convert times: "5pm" to "17:00", "9am" to "09:00"
+- If user just provides a time like "make it 6pm", update the time in startDateISO
+- Only include modified fields in modifications object
+
+Examples:
+"Yes" → {"intent": "confirm", "modifications": {}, "confidence": 100}
+"No thanks" → {"intent": "reject", "modifications": {}, "confidence": 100}
+"Change time to 6pm" → {"intent": "modify", "modifications": {"startDateISO": "...with time 18:00"}, "confidence": 95}
+"Make it tomorrow instead" → {"intent": "modify", "modifications": {"startDateISO": "tomorrow's date"}, "confidence": 95}
+"Update title to Team Meeting" → {"intent": "modify", "modifications": {"title": "Team Meeting"}, "confidence": 95}
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Gemini User Response Analysis:', jsonText);
+    
+    const analysis = JSON.parse(jsonText);
+    
+    return analysis;
+    
+  } catch (error) {
+    console.error('Error in Gemini user response analysis:', error);
+    return {
+      intent: 'unclear',
+      modifications: {},
+      confidence: 0
+    };
+  }
+}
+
 // Helper function to use Gemini to detect modifications user wants to make
 async function detectModificationsWithGemini(userMessage, currentData, actionType) {
   try {
@@ -563,8 +1033,6 @@ User's modification request: "${userMessage}"
 Analyze what the user wants to change. They might want to:
 - Change the title
 - Change the date/time
-- Change the duration
-- Change recurrence settings
 - Change other details
 
 Return a JSON object with this EXACT structure:
@@ -684,20 +1152,6 @@ Return ONLY valid JSON, no markdown, no explanation.`;
   }
 }
 
-// Helper function to check if user response is affirmative
-function isAffirmative(message) {
-  const trimmed = message.trim().toLowerCase();
-  // Check for common affirmative responses (with word boundaries to allow phrases)
-  return /\b(yes|yeah|yep|sure|ok|okay|confirm|yup|correct|right|go ahead|do it|create|schedule|proceed)\b/i.test(trimmed);
-}
-
-// Helper function to check if user response is negative
-function isNegative(message) {
-  const trimmed = message.trim().toLowerCase();
-  // Check for common negative responses
-  return /\b(no|nope|nah|cancel|stop|don't|do not|never mind|forget it|abort)\b/i.test(trimmed);
-}
-
 // Helper function to prepare action confirmation
 async function prepareActionConfirmation(type, data, userId) {
   if (type === 'create_task') {
@@ -732,16 +1186,37 @@ async function prepareActionConfirmation(type, data, userId) {
       reminderInfo = ` (${data.scheduleTime.minutesBeforeStart} min reminder)`;
     }
     
-    const routineInfo = data.isRoutine ? ' (Routine task)' : '';
-    const daysInfo = data.scheduleDays && data.scheduleDays.length > 0 
-      ? ` - Repeats: ${data.scheduleDays.join(', ')}` 
-      : '';
+    // Format routine information with day names
+    let routineInfo = '';
+    let daysInfo = '';
+    
+    if (data.isRoutine && data.scheduleDays && data.scheduleDays.length > 0) {
+      const dayNames = {
+        'SU': 'Sunday',
+        'MO': 'Monday',
+        'TU': 'Tuesday',
+        'WE': 'Wednesday',
+        'TH': 'Thursday',
+        'FR': 'Friday',
+        'SA': 'Saturday'
+      };
+      
+      const dayNamesList = data.scheduleDays.map(d => dayNames[d] || d).join(', ');
+      
+      if (data.scheduleDays.length === 7) {
+        routineInfo = ' (Daily Routine)';
+      } else {
+        routineInfo = ' (Routine Task)';
+        daysInfo = `\n• Repeats: ${dayNamesList}`;
+      }
+    }
     
     let detailedMessage = `📋 Task Details:\n`;
     detailedMessage += `• Title: "${data.title}"\n`;
     if (scheduleInfo) detailedMessage += `• Scheduled:${scheduleInfo}${reminderInfo}\n`;
-    if (daysInfo) detailedMessage += `• ${daysInfo.trim()}\n`;
-    if (routineInfo) detailedMessage += `• Type:${routineInfo}\n`;
+    if (routineInfo) detailedMessage += `• Type:${routineInfo}`;
+    if (daysInfo) detailedMessage += daysInfo;
+    if (routineInfo || daysInfo) detailedMessage += `\n`;
     if (data.description && data.description !== data.title) {
       detailedMessage += `• Description: ${data.description}\n`;
     }
