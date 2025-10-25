@@ -176,162 +176,195 @@ router.delete('/conversation', auth, async (req, res) => {
   }
 });
 
+// Helper function to use Gemini to intelligently detect user intent and extract details
+async function detectActionWithGemini(userMessage, userId) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const currentDate = new Date(); // October 25, 2025 based on context
+    const prompt = `You are an intelligent assistant that analyzes user messages to detect scheduling intents.
+
+Current date and time: ${currentDate.toISOString()} (${currentDate.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'full', timeStyle: 'short' })})
+
+Analyze this user message: "${userMessage}"
+
+Your task:
+1. Detect if the user wants to create a TASK or MEETING, or neither
+2. Extract ALL details from the message (title, date, time, duration, recurrence, description)
+3. Calculate the EXACT date and time based on relative terms (tomorrow, next week, etc.)
+4. Identify any missing required information
+
+Return a JSON object with this EXACT structure:
+{
+  "intent": "task" | "meeting" | "none",
+  "data": {
+    "title": "extracted or generated title from user intent",
+    "description": "full user message or extracted description",
+    "startDateISO": "YYYY-MM-DDTHH:mm:ss.sssZ (exact ISO date-time, required)",
+    "duration": number (in minutes, for meetings, default 30),
+    "isRoutine": boolean (true if daily/weekly/monthly pattern),
+    "isRecurring": boolean (for meetings),
+    "scheduleType": "one-day" | "routine" | "specific-days",
+    "scheduleDays": ["MO", "TU", "WE", "TH", "FR", "SA", "SU"] (if routine/recurring),
+    "scheduleTime": {
+      "fixedTime": "HH:mm" or null,
+      "minutesBeforeStart": number (default 15 for tasks, 10 for meetings)
+    }
+  },
+  "missingFields": ["field1", "field2"] (array of missing required fields),
+  "confidence": number (0-100, how confident you are about the detection)
+}
+
+CRITICAL RULES:
+- If user says "tomorrow", calculate from current date (${currentDate.toLocaleDateString()})
+- If user says "tomorrow 5pm" = ${new Date(currentDate.getTime() + 24*60*60*1000).toLocaleDateString()} at 17:00
+- If user says "next Monday" = calculate the next Monday from today
+- ALWAYS provide a title - create one from the user's intent if not explicitly stated
+- For time: convert "5pm" to "17:00", "9am" to "09:00"
+- If no time specified for task, use scheduleTime.minutesBeforeStart instead of fixedTime
+- If time IS specified, use scheduleTime.fixedTime with HH:mm format
+- Mark field as missing ONLY if it's required and truly cannot be inferred
+- Be smart: "team standup tomorrow" = title: "Team Standup", date: tomorrow at 09:00 (typical standup time)
+
+Examples:
+"Create task for tomorrow 5pm" → startDateISO: "${new Date(new Date(currentDate).setDate(currentDate.getDate() + 1)).toISOString().split('T')[0]}T17:00:00.000Z"
+"Meeting next Monday at 2pm" → calculate next Monday from ${currentDate.toLocaleDateString()}, set time to 14:00
+"Daily standup at 9am" → isRoutine: true, scheduleType: "routine", scheduleDays: ["MO","TU","WE","TH","FR"], fixedTime: "09:00"
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    
+    // Remove markdown code blocks if present
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Gemini Intent Detection Response:', jsonText);
+    
+    const analysis = JSON.parse(jsonText);
+    
+    // If confidence is too low or no intent detected, return null
+    if (analysis.intent === 'none' || analysis.confidence < 50) {
+      return null;
+    }
+    
+    return analysis;
+    
+  } catch (error) {
+    console.error('Error in Gemini intent detection:', error);
+    return null;
+  }
+}
+
 // Helper function to detect actions in the conversation
 async function detectAction(assistantResponse, userMessage, userId) {
-  const lastAssistantMessage = Array.isArray(assistantResponse) 
-    ? assistantResponse[assistantResponse.length - 1]?.content || ''
-    : String(assistantResponse || '');
+  console.log('🔍 Detecting action for message:', userMessage);
   
-  const lowerResponse = lastAssistantMessage.toLowerCase();
-  const lowerMessage = String(userMessage || '').toLowerCase();
+  // Use Gemini for intelligent intent detection
+  const geminiAnalysis = await detectActionWithGemini(userMessage, userId);
   
-  
-  // Extract task/meeting details using more comprehensive patterns
-  const extractDetails = (message) => {
-    // Extract title (more robust pattern)
-    const titleMatch = /(?:title|name|call(?:ed|ing)|titled?|about|for|regarding|on)[\s:]+["']?([^"'.!?]+)["']?/i.exec(message) || 
-                      /(?:create|add|new|schedule|set up)\s+(?:a\s+)?(?:meeting|task|appointment|reminder|event)[\s:]+["']?([^"'.!?]+)["']?/i.exec(message);
-    
-    // Extract time (supports 12h and 24h formats)
-    const timeMatch = /(?:at|by|for|on)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?)/i.exec(message);
-    
-    // Extract date (supports relative and absolute dates)
-    const dateMatch = /(?:on|for|due|scheduled for)?\s*(?:the\s*)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|next week|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/i.exec(message);
-    
-    // Extract duration (for meetings)
-    const durationMatch = /(?:for|duration|length|time)[\s:]+(\d+)\s*(?:min|minutes?|h|hours?|hrs?)/i.exec(message);
-    
-    return {
-      title: titleMatch ? (titleMatch[1] || titleMatch[2] || '').trim() : null,
-      time: timeMatch ? timeMatch[1] : null,
-      date: dateMatch ? dateMatch[1] : null,
-      duration: durationMatch ? parseInt(durationMatch[1]) : 30 // Default to 30 minutes
-    };
-  };
-
-  // Check for task creation intent
-  if (lowerResponse.match(/\b(create|add|new|set up)\s+(?:a\s+)?(task|reminder|todo)\b/i) ||
-      lowerMessage.match(/\b(create|add|new|set up)\s+(?:a\s+)?(task|reminder|todo)\b/i)) {
-    
-    const details = extractDetails(userMessage);
-    const isRoutine = /\b(routine|daily|weekly|monthly|every day|each day|every\s+\w+day)\b/i.test(userMessage);
-    
-    try {
-      // Use Gemini to suggest a schedule
-      const schedule = await suggestFullScheduleWithGemini({
-        userId,
-        now: new Date(),
-        item: {
-          type: 'Task',
-          title: details.title || 'Untitled Task',
-          description: userMessage
-        }
-      });
-
-      const taskData = {
-        title: details.title || 'New Task',
-        description: userMessage,
-        scheduleType: schedule.scheduleType || (isRoutine ? 'routine' : 'one-day'),
-        startDateISO: schedule.startDateISO,
-        scheduleDays: schedule.scheduleDays || [],
-        scheduleTime: schedule.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
-        isRoutine
-      };
-
-      // Prepare confirmation message
-      const confirmation = await prepareActionConfirmation('create_task', taskData, userId);
-
-      return {
-        type: 'create_task',
-        data: confirmation.data,
-        confirmationNeeded: true,
-        confirmationMessage: confirmation.confirmationMessage
-      };
-    } catch (error) {
-      console.error('Error suggesting schedule:', error);
-      // Fallback to basic task creation if Gemini fails
-      const taskData = {
-        title: details.title || 'New Task',
-        description: userMessage,
-        scheduleType: isRoutine ? 'routine' : 'one-day',
-        scheduleTime: { minutesBeforeStart: 15, fixedTime: null },
-        isRoutine
-      };
-
-      const confirmation = await prepareActionConfirmation('create_task', taskData, userId);
-
-      return {
-        type: 'create_task',
-        data: confirmation.data,
-        confirmationNeeded: true,
-        confirmationMessage: confirmation.confirmationMessage
-      };
-    }
+  if (!geminiAnalysis || geminiAnalysis.intent === 'none') {
+    console.log('❌ No action detected by Gemini');
+    return null;
   }
   
-  // Check for meeting creation intent
-  if (lowerResponse.match(/\b(create|schedule|set up|new)\s+(?:a\s+)?(meeting|appointment|call|event)\b/i) ||
-      lowerMessage.match(/\b(create|schedule|set up|new)\s+(?:a\s+)?(meeting|appointment|call|event)\b/i)) {
+  console.log('✅ Gemini detected intent:', geminiAnalysis.intent);
+  console.log('📊 Extracted data:', JSON.stringify(geminiAnalysis.data, null, 2));
+  console.log('⚠️ Missing fields:', geminiAnalysis.missingFields);
+  
+  // Check if we have missing required fields
+  if (geminiAnalysis.missingFields && geminiAnalysis.missingFields.length > 0) {
+    const actionType = geminiAnalysis.intent === 'task' ? 'create_task' : 'schedule_meeting';
     
-    const details = extractDetails(userMessage);
-    const isRecurring = /\b(recurring|weekly|monthly|every week|each week|every month|bi[\s-]?weekly)\b/i.test(userMessage);
+    return {
+      type: actionType,
+      data: geminiAnalysis.data,
+      needsMoreInfo: true,
+      missingFields: geminiAnalysis.missingFields,
+      question: generateMissingFieldsQuestion(geminiAnalysis.missingFields, geminiAnalysis.data)
+    };
+  }
+  
+  // We have all required info, prepare for confirmation
+  if (geminiAnalysis.intent === 'task') {
+    const taskData = {
+      title: geminiAnalysis.data.title,
+      description: geminiAnalysis.data.description || userMessage,
+      scheduleType: geminiAnalysis.data.scheduleType || 'one-day',
+      startDateISO: geminiAnalysis.data.startDateISO,
+      scheduleDays: geminiAnalysis.data.scheduleDays || [],
+      scheduleTime: geminiAnalysis.data.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
+      isRoutine: geminiAnalysis.data.isRoutine || false
+    };
+
+    const confirmation = await prepareActionConfirmation('create_task', taskData, userId);
+
+    return {
+      type: 'create_task',
+      data: confirmation.data,
+      confirmationNeeded: true,
+      confirmationMessage: confirmation.confirmationMessage
+    };
+  } 
+  
+  if (geminiAnalysis.intent === 'meeting') {
+    const startDate = new Date(geminiAnalysis.data.startDateISO);
+    const duration = geminiAnalysis.data.duration || 30;
+    const endDate = new Date(startDate.getTime() + duration * 60000);
     
-    try {
-      // Use Gemini to suggest a schedule
-      const schedule = await suggestFullScheduleWithGemini({
-        userId,
-        now: new Date(),
-        item: {
-          type: 'Meeting',
-          title: details.title || 'Untitled Meeting',
-          description: userMessage,
-          duration: details.duration || 30
-        }
-      });
+    const meetingData = {
+      title: geminiAnalysis.data.title,
+      description: geminiAnalysis.data.description || userMessage,
+      startTime: geminiAnalysis.data.startDateISO,
+      endTime: endDate.toISOString(),
+      duration: duration,
+      isRecurring: geminiAnalysis.data.isRecurring || false,
+      recurrencePattern: geminiAnalysis.data.isRecurring && geminiAnalysis.data.scheduleDays 
+        ? `FREQ=WEEKLY;BYDAY=${geminiAnalysis.data.scheduleDays.join(',')}`
+        : null,
+      scheduleTime: geminiAnalysis.data.scheduleTime || { minutesBeforeStart: 10, fixedTime: null }
+    };
 
-      const meetingData = {
-        title: details.title || 'New Meeting',
-        description: userMessage,
-        startTime: schedule.startDateISO || new Date().toISOString(),
-        endTime: new Date(new Date(schedule.startDateISO || new Date()).getTime() + (details.duration || 30) * 60000).toISOString(),
-        duration: details.duration || 30,
-        isRecurring,
-        recurrencePattern: isRecurring ? 'FREQ=WEEKLY;BYDAY=' + (schedule.scheduleDays?.join(',') || 'MO,WE,FR') : null
-      };
+    const confirmation = await prepareActionConfirmation('schedule_meeting', meetingData, userId);
 
-      // Prepare confirmation message
-      const confirmation = await prepareActionConfirmation('schedule_meeting', meetingData, userId);
-
-      return {
-        type: 'schedule_meeting',
-        data: confirmation.data,
-        confirmationNeeded: true,
-        confirmationMessage: confirmation.confirmationMessage
-      };
-    } catch (error) {
-      console.error('Error suggesting meeting schedule:', error);
-      // Fallback to basic meeting creation if Gemini fails
-      const meetingData = {
-        title: details.title || 'New Meeting',
-        description: userMessage,
-        startTime: new Date().toISOString(),
-        endTime: new Date(Date.now() + (details.duration || 30) * 60000).toISOString(),
-        duration: details.duration || 30,
-        isRecurring
-      };
-
-      const confirmation = await prepareActionConfirmation('schedule_meeting', meetingData, userId);
-
-      return {
-        type: 'schedule_meeting',
-        data: confirmation.data,
-        confirmationNeeded: true,
-        confirmationMessage: confirmation.confirmationMessage
-      };
-    }
+    return {
+      type: 'schedule_meeting',
+      data: confirmation.data,
+      confirmationNeeded: true,
+      confirmationMessage: confirmation.confirmationMessage
+    };
   }
   
   return null;
+}
+
+// Helper function to generate a friendly question for missing fields
+function generateMissingFieldsQuestion(missingFields, extractedData) {
+  const fieldMap = {
+    title: 'a title or name',
+    startDateISO: 'a date and time',
+    duration: 'a duration (how long)',
+    description: 'more details or description'
+  };
+  
+  let extracted = [];
+  if (extractedData.title) extracted.push(`"${extractedData.title}"`);
+  if (extractedData.startDateISO) {
+    const date = new Date(extractedData.startDateISO);
+    extracted.push(`on ${date.toLocaleDateString()} at ${date.toLocaleTimeString()}`);
+  }
+  
+  const missingList = missingFields.map(f => fieldMap[f] || f).join(' and ');
+  
+  let message = '';
+  if (extracted.length > 0) {
+    message = `I understand you want to create ${extracted.join(' ')}. `;
+  }
+  
+  message += `Could you please provide ${missingList}?`;
+  
+  return message;
 }
 
 // Helper function to handle pending actions (confirmations, missing info)
@@ -407,35 +440,66 @@ async function handlePendingAction(conversation, message, userId, userObj) {
         action: 'action_cancelled'
       };
     } else {
-      // User said something else, re-prompt for confirmation
-      console.log('⚠️ User response unclear, re-prompting for confirmation');
-      return {
-        success: true,
-        response: "I didn't quite catch that. Would you like me to create this? Please say 'yes' to confirm or 'no' to cancel.",
-        action: 'awaiting_confirmation',
-        data: pendingAction.data
-      };
+      // User wants to make changes - use Gemini to detect what they want to change
+      console.log('🔧 User wants to make changes. Detecting modifications...');
+      
+      const modifications = await detectModificationsWithGemini(
+        message,
+        pendingAction.data,
+        pendingAction.type
+      );
+      
+      if (modifications.hasChanges) {
+        console.log('✏️ Changes detected:', JSON.stringify(modifications.updatedData, null, 2));
+        
+        // Update pending action with modified data
+        conversation.pendingAction.data = modifications.updatedData;
+        await conversation.save();
+        
+        // Re-confirm with updated details
+        const confirmation = await prepareActionConfirmation(
+          pendingAction.type,
+          modifications.updatedData,
+          userId
+        );
+        
+        return {
+          success: true,
+          response: `Got it! I've updated the details. ${confirmation.confirmationMessage}`,
+          action: 'confirm_action',
+          data: modifications.updatedData
+        };
+      } else {
+        // Couldn't detect changes, re-prompt for confirmation
+        console.log('⚠️ User response unclear, re-prompting for confirmation');
+        return {
+          success: true,
+          response: "I didn't quite catch that. Would you like me to create this? Please say 'yes' to confirm, 'no' to cancel, or tell me what you'd like to change.",
+          action: 'awaiting_confirmation',
+          data: pendingAction.data
+        };
+      }
     }
   }
   
   // Handle missing information
   if (pendingAction.missingFields && pendingAction.missingFields.length > 0) {
-    const updatedData = { ...pendingAction.data };
-    const extractedFields = {};
-    let allFieldsFilled = true;
+    console.log('📝 Handling missing fields with Gemini. Missing:', pendingAction.missingFields);
     
-    // Extract information from user's message
-    for (const field of pendingAction.missingFields) {
-      const value = extractField(field, message);
-      if (value) {
-        updatedData[field] = value;
-        extractedFields[field] = value;
-      } else {
-        allFieldsFilled = false;
-      }
-    }
+    // Use Gemini to extract missing information from user's response
+    const extractedInfo = await extractMissingFieldsWithGemini(
+      message, 
+      pendingAction.missingFields, 
+      pendingAction.data,
+      pendingAction.type
+    );
     
-    if (allFieldsFilled) {
+    console.log('🤖 Gemini extracted info:', JSON.stringify(extractedInfo, null, 2));
+    
+    const updatedData = { ...pendingAction.data, ...extractedInfo.extractedData };
+    
+    if (extractedInfo.allFieldsFilled) {
+      console.log('✅ All fields filled! Preparing confirmation...');
       // All missing fields are now filled, confirm before creating
       const action = await prepareActionConfirmation(
         pendingAction.type,
@@ -458,27 +522,166 @@ async function handlePendingAction(conversation, message, userId, userObj) {
         data: updatedData
       };
     } else {
+      console.log('⚠️ Still missing fields:', extractedInfo.remainingFields);
       // Still missing some fields, ask for them
-      const remainingFields = pendingAction.missingFields.filter(
-        f => !updatedData[f]
-      );
-      
-      conversation.pendingAction.missingFields = remainingFields;
+      conversation.pendingAction.data = updatedData;
+      conversation.pendingAction.missingFields = extractedInfo.remainingFields;
       await conversation.save();
       
       return {
         success: true,
-        response: getMissingFieldsMessage(remainingFields, extractedFields),
+        response: generateMissingFieldsQuestion(extractedInfo.remainingFields, updatedData),
         action: 'needs_info',
         data: { 
-          missingFields: remainingFields,
-          extractedFields
+          missingFields: extractedInfo.remainingFields,
+          extractedFields: extractedInfo.extractedData
         }
       };
     }
   }
   
   return null;
+}
+
+// Helper function to use Gemini to detect modifications user wants to make
+async function detectModificationsWithGemini(userMessage, currentData, actionType) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const currentDate = new Date(); // October 25, 2025
+    
+    const prompt = `You are helping detect modifications a user wants to make to a scheduled item.
+
+Current date and time: ${currentDate.toISOString()} (${currentDate.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'full', timeStyle: 'short' })})
+
+Action type: ${actionType === 'create_task' ? 'Task' : 'Meeting'}
+
+Current item details: ${JSON.stringify(currentData, null, 2)}
+
+User's modification request: "${userMessage}"
+
+Analyze what the user wants to change. They might want to:
+- Change the title
+- Change the date/time
+- Change the duration
+- Change recurrence settings
+- Change other details
+
+Return a JSON object with this EXACT structure:
+{
+  "hasChanges": boolean (true if user wants to make changes),
+  "updatedData": {
+    // Include ALL fields from currentData, with modifications applied
+    // Calculate exact dates for relative terms like "change to tomorrow 6pm"
+    // Keep unchanged fields as they are
+  },
+  "changesSummary": "brief description of what was changed"
+}
+
+CRITICAL RULES:
+- If user says "change time to 6pm", update scheduleTime.fixedTime to "18:00"
+- If user says "make it tomorrow", calculate tomorrow's date from ${currentDate.toLocaleDateString()}
+- If user says "change title to X", update title to "X"
+- If user says "make it 1 hour" or "45 minutes", update duration
+- Keep ALL other fields unchanged from currentData
+- Calculate exact ISO dates for any date/time changes
+- If you can't detect any specific change request, set hasChanges to false
+
+Examples:
+"Change time to 6pm" → update scheduleTime.fixedTime or startDateISO time portion
+"Make it tomorrow" → update startDateISO to tomorrow's date
+"Change title to Team Meeting" → update title
+"Make it 45 minutes" → update duration to 45
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Gemini Modification Detection:', jsonText);
+    
+    const modifications = JSON.parse(jsonText);
+    
+    return modifications;
+    
+  } catch (error) {
+    console.error('Error in Gemini modification detection:', error);
+    return {
+      hasChanges: false,
+      updatedData: currentData,
+      changesSummary: ''
+    };
+  }
+}
+
+// Helper function to use Gemini to extract missing field information
+async function extractMissingFieldsWithGemini(userMessage, missingFields, existingData, actionType) {
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    const currentDate = new Date(); // October 25, 2025
+    
+    const prompt = `You are helping extract missing information from a user's response.
+
+Current date and time: ${currentDate.toISOString()} (${currentDate.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'full', timeStyle: 'short' })})
+
+Action type: ${actionType === 'create_task' ? 'Creating a Task' : 'Scheduling a Meeting'}
+
+Existing data: ${JSON.stringify(existingData, null, 2)}
+
+Missing fields needed: ${JSON.stringify(missingFields)}
+
+User's response: "${userMessage}"
+
+Extract the missing field values from the user's message. Calculate exact dates and times based on relative terms.
+
+Return a JSON object with this EXACT structure:
+{
+  "extractedData": {
+    "title": "extracted title if missing",
+    "startDateISO": "YYYY-MM-DDTHH:mm:ss.sssZ (exact ISO datetime)",
+    "duration": number (minutes),
+    "description": "extracted description"
+  },
+  "allFieldsFilled": boolean (true if all missing fields are now filled),
+  "remainingFields": ["field1", "field2"] (fields still missing)
+}
+
+CRITICAL RULES:
+- Only include fields in extractedData that were in the missingFields list
+- Calculate exact dates: "tomorrow 5pm" from ${currentDate.toLocaleDateString()} = ${new Date(currentDate.getTime() + 24*60*60*1000).toLocaleDateString()} at 17:00:00
+- Convert times: "5pm" = "17:00", "9am" = "09:00"
+- If user says "tomorrow" without time for a task, provide startDateISO for tomorrow at 00:00 (time will be set via scheduleTime)
+- If user says "tomorrow 3pm" for a meeting/task, provide exact datetime
+- Be smart and infer reasonable values when possible
+- Only mark as remaining if truly cannot be extracted or inferred
+
+Return ONLY valid JSON, no markdown, no explanation.`;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    
+    const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('🤖 Gemini Missing Fields Extraction:', jsonText);
+    
+    const extraction = JSON.parse(jsonText);
+    
+    return extraction;
+    
+  } catch (error) {
+    console.error('Error in Gemini field extraction:', error);
+    // Fallback: return empty extraction
+    return {
+      extractedData: {},
+      allFieldsFilled: false,
+      remainingFields: missingFields
+    };
+  }
 }
 
 // Helper function to check if user response is affirmative
@@ -495,116 +698,95 @@ function isNegative(message) {
   return /\b(no|nope|nah|cancel|stop|don't|do not|never mind|forget it|abort)\b/i.test(trimmed);
 }
 
-// Helper function to extract field values from user message
-function extractField(field, message) {
-  switch (field) {
-    case 'title':
-      return extractTitle(message);
-    case 'time':
-      return extractTime(message);
-    case 'date':
-      return extractDate(message);
-    case 'duration':
-      return extractDuration(message);
-    default:
-      return null;
-  }
-}
-
-// Helper functions for extracting specific fields
-function extractTitle(message) {
-  const titleMatch = /(?:title|name|call(?:ed|ing)|titled?|about|for|regarding|on)[\s:]+["']?([^"'.!?]+)["']?/i.exec(message) || 
-                    /(?:create|add|new|schedule|set up)\s+(?:a\s+)?(?:meeting|task|appointment|reminder|event)[\s:]+["']?([^"'.!?]+)["']?/i.exec(message);
-  return titleMatch ? (titleMatch[1] || titleMatch[2] || '').trim() : null;
-}
-
-function extractTime(message) {
-  const timeMatch = /(?:at|by|for|on)?\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?)/i.exec(message);
-  return timeMatch ? timeMatch[1] : null;
-}
-
-function extractDate(message) {
-  const dateMatch = /(?:on|for|due|scheduled for)?\s*(?:the\s*)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|next week|\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)/i.exec(message);
-  return dateMatch ? dateMatch[1] : null;
-}
-
-function extractDuration(message) {
-  const durationMatch = /(?:for|duration|length|time)[\s:]+(\d+)\s*(?:min|minutes?|h|hours?|hrs?)/i.exec(message);
-  return durationMatch ? parseInt(durationMatch[1]) : null;
-}
-
 // Helper function to prepare action confirmation
 async function prepareActionConfirmation(type, data, userId) {
   if (type === 'create_task') {
-    // Use Gemini to suggest a schedule if not provided
-    if (!data.scheduleType || !data.scheduleTime) {
-      try {
-        const schedule = await suggestFullScheduleWithGemini({
-          userId,
-          now: new Date(),
-          item: {
-            type: 'Task',
-            title: data.title || 'Untitled Task',
-            description: data.description || ''
-          }
+    // Format the date and time for user-friendly display
+    let scheduleInfo = '';
+    
+    if (data.startDateISO) {
+      const startDate = new Date(data.startDateISO);
+      const dateStr = startDate.toLocaleDateString('en-US', { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      
+      if (data.scheduleTime?.fixedTime) {
+        scheduleInfo = ` on ${dateStr} at ${data.scheduleTime.fixedTime}`;
+      } else {
+        const timeStr = startDate.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
         });
-        data.scheduleType = schedule.scheduleType;
-        data.scheduleTime = schedule.scheduleTime;
-        data.startDateISO = schedule.startDateISO;
-      } catch (error) {
-        console.error('Error suggesting schedule:', error);
-        // Fallback to default values
-        data.scheduleType = 'one-day';
-        data.scheduleTime = { minutesBeforeStart: 15, fixedTime: null };
+        scheduleInfo = ` on ${dateStr} at ${timeStr}`;
       }
+    } else if (data.scheduleTime?.fixedTime) {
+      scheduleInfo = ` at ${data.scheduleTime.fixedTime}`;
     }
     
-    const timeInfo = data.scheduleTime?.fixedTime 
-      ? ` at ${data.scheduleTime.fixedTime}` 
-      : data.scheduleTime?.minutesBeforeStart 
-        ? ` with ${data.scheduleTime.minutesBeforeStart} minutes reminder`
-        : '';
-        
-    const dateInfo = data.startDateISO 
-      ? ` on ${new Date(data.startDateISO).toLocaleDateString()}` 
+    let reminderInfo = '';
+    if (data.scheduleTime?.minutesBeforeStart && !data.scheduleTime.fixedTime) {
+      reminderInfo = ` (${data.scheduleTime.minutesBeforeStart} min reminder)`;
+    }
+    
+    const routineInfo = data.isRoutine ? ' (Routine task)' : '';
+    const daysInfo = data.scheduleDays && data.scheduleDays.length > 0 
+      ? ` - Repeats: ${data.scheduleDays.join(', ')}` 
       : '';
+    
+    let detailedMessage = `📋 Task Details:\n`;
+    detailedMessage += `• Title: "${data.title}"\n`;
+    if (scheduleInfo) detailedMessage += `• Scheduled:${scheduleInfo}${reminderInfo}\n`;
+    if (daysInfo) detailedMessage += `• ${daysInfo.trim()}\n`;
+    if (routineInfo) detailedMessage += `• Type:${routineInfo}\n`;
+    if (data.description && data.description !== data.title) {
+      detailedMessage += `• Description: ${data.description}\n`;
+    }
+    detailedMessage += `\nShould I create this task? (Yes/No, or tell me what to change)`;
       
     return {
-      confirmationMessage: `I'll create a task \"${data.title}\"${timeInfo}${dateInfo}. Is that correct?`,
+      confirmationMessage: detailedMessage,
       data
     };
     
   } else if (type === 'schedule_meeting') {
-    // Format meeting time
-    let timeInfo = '';
-    if (data.time) {
-      timeInfo = ` at ${data.time}`;
+    // Format meeting date and time
+    let scheduleInfo = '';
+    
+    if (data.startTime) {
+      const startDate = new Date(data.startTime);
+      const dateStr = startDate.toLocaleDateString('en-US', { 
+        weekday: 'long', 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+      });
+      const timeStr = startDate.toLocaleTimeString('en-US', { 
+        hour: 'numeric', 
+        minute: '2-digit',
+        hour12: true 
+      });
+      scheduleInfo = `${dateStr} at ${timeStr}`;
     }
     
-    // Format meeting date
-    let dateInfo = '';
-    if (data.date) {
-      dateInfo = ` on ${data.date}`;
-    } else if (data.startTime) {
-      dateInfo = ` on ${new Date(data.startTime).toLocaleDateString()}`;
-    }
+    const durationInfo = data.duration ? `${data.duration} minutes` : '30 minutes';
+    const recurrenceInfo = data.isRecurring ? 'Yes' : 'No';
     
-    // Format duration
-    let durationInfo = '';
-    if (data.duration) {
-      durationInfo = ` for ${data.duration} minutes`;
+    let detailedMessage = `📅 Meeting Details:\n`;
+    detailedMessage += `• Title: "${data.title}"\n`;
+    if (scheduleInfo) detailedMessage += `• When: ${scheduleInfo}\n`;
+    detailedMessage += `• Duration: ${durationInfo}\n`;
+    detailedMessage += `• Recurring: ${recurrenceInfo}\n`;
+    if (data.description && data.description !== data.title) {
+      detailedMessage += `• Description: ${data.description}\n`;
     }
-    
-    // Format recurrence
-    let recurrenceInfo = '';
-    if (data.isRecurring) {
-      recurrenceInfo = data.recurrencePattern 
-        ? ` (recurring ${data.recurrencePattern})`
-        : ' (recurring)';
-    }
+    detailedMessage += `\nShould I schedule this meeting? (Yes/No, or tell me what to change)`;
     
     return {
-      confirmationMessage: `I'll schedule a meeting \"${data.title}\"${timeInfo}${dateInfo}${durationInfo}${recurrenceInfo}. Is that correct?`,
+      confirmationMessage: detailedMessage,
       data
     };
   }
@@ -612,7 +794,117 @@ async function prepareActionConfirmation(type, data, userId) {
   return { confirmationMessage: 'Should I proceed with this?', data };
 }
 
+// Helper function to generate a friendly question for missing fields
+function generateMissingFieldsQuestion(missingFields, extractedData) {
+  const fieldMap = {
+    title: 'a title or name',
+    startDateISO: 'a date and time',
+    duration: 'a duration (how long)',
+    description: 'more details or description'
+  };
+  
+  let extracted = [];
+  if (extractedData.title) extracted.push(`"${extractedData.title}"`);
+  if (extractedData.startDateISO) {
+    const date = new Date(extractedData.startDateISO);
+    extracted.push(`on ${date.toLocaleDateString()} at ${date.toLocaleTimeString()}`);
+  }
+  
+  const missingList = missingFields.map(f => fieldMap[f] || f).join(' and ');
+  
+  let message = '';
+  if (extracted.length > 0) {
+    message = `I understand you want to create ${extracted.join(' ')}. `;
+  }
+  
+  message += `Could you please provide ${missingList}?`;
+  
+  return message;
+}
+
 // Helper function to create a task in the database
+async function createTask(taskData, userId) {
+  console.log('📝 Creating task with data:', JSON.stringify({ taskData, userId }, null, 2));
+  
+  // Prepare reminder data matching the reminderModel schema
+  const reminderData = {
+    user: userId,
+    type: 'Task',
+    title: taskData.title,
+    description: taskData.description || '',
+    startDate: taskData.startDateISO ? new Date(taskData.startDateISO) : null,
+    isCompleted: false,
+    isManualSchedule: taskData.scheduleType === 'routine' ? true : (taskData.startDateISO ? true : false),
+    aiSuggested: true,
+    scheduleType: taskData.scheduleType || 'one-day',
+    scheduleTime: taskData.scheduleTime || { minutesBeforeStart: 15, fixedTime: null },
+    scheduleDays: taskData.scheduleDays || [],
+    notificationPreferenceMinutes: taskData.scheduleTime?.minutesBeforeStart || 15,
+    icon: 'star'
+  };
+  
+  console.log('💾 Prepared reminder data:', JSON.stringify(reminderData, null, 2));
+  
+  try {
+    const task = new Reminder(reminderData);
+    const savedTask = await task.save();
+    console.log('✅ Task saved to database with ID:', savedTask._id);
+    console.log('✅ Full saved task:', JSON.stringify(savedTask.toObject(), null, 2));
+    return savedTask;
+  } catch (error) {
+    console.error('❌ Error saving task to database:', {
+      error: error.message,
+      stack: error.stack,
+      validationErrors: error.errors,
+      reminderData: reminderData
+    });
+    throw error;
+  }
+}
+
+// Helper function to create a meeting in the database
+async function createMeeting(meetingData, userId) {
+  console.log('📅 Creating meeting with data:', JSON.stringify({ meetingData, userId }, null, 2));
+  
+  try {
+    const duration = meetingData.duration || 30;
+    const startDate = meetingData.startTime ? new Date(meetingData.startTime) : new Date();
+    const endDate = new Date(startDate.getTime() + duration * 60000);
+
+    const reminderData = {
+      type: 'Meeting',
+      user: userId,
+      title: meetingData.title,
+      description: meetingData.description || '',
+      startDate,
+      endDate,
+      isManualSchedule: true,
+      scheduleType: 'one-day',
+      scheduleTime: meetingData.scheduleTime || { minutesBeforeStart: 10 },
+      notificationPreferenceMinutes: 10,
+      aiSuggested: true,
+      icon: 'star'
+    };
+
+    console.log('💾 Prepared meeting reminder data:', JSON.stringify(reminderData, null, 2));
+
+    const meeting = new Reminder(reminderData);
+    const saved = await meeting.save();
+    console.log('✅ Meeting saved to database with ID:', saved._id);
+    console.log('✅ Full saved meeting:', JSON.stringify(saved.toObject(), null, 2));
+    return saved;
+  } catch (err) {
+    console.error('❌ Meeting Save Error:', {
+      error: err.message,
+      stack: err.stack,
+      validationErrors: err.errors,
+      meetingData: meetingData
+    });
+    throw err;
+  }
+}
+
+module.exports = router;
 async function createTask(taskData, userId) {
   console.log('📝 Creating task with data:', JSON.stringify({ taskData, userId }, null, 2));
   
